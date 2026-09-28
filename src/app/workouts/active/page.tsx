@@ -14,33 +14,42 @@ import { calculateWorkoutVolume } from "@/lib/formulas";
 export default function ActiveWorkoutView() {
   const router = useRouter();
   const [restTimerEnabled, setRestTimerEnabled] = useState(true);
+  const [showExerciseSelector, setShowExerciseSelector] = useState(false);
 
-  const activeWorkout = useLiveQuery(() =>
-    db.workouts.filter((w) => !w.isCompleted).first()
+  const activeWorkout = useLiveQuery(
+    () => db.workouts.filter((w) => !w.isCompleted).first(),
+    []
   );
 
-  const workoutExercises = useLiveQuery(
-    () =>
-      activeWorkout
-        ? db.workoutExercises.where("workoutId").equals(activeWorkout.id).sortBy("orderIndex")
-        : Promise.resolve([]),
-    [activeWorkout]
-  ) || [];
+  const workoutExercises =
+    useLiveQuery<WorkoutExercise[]>(
+      () =>
+        activeWorkout
+          ? db.workoutExercises
+              .where("workoutId")
+              .equals(activeWorkout.id)
+              .sortBy("orderIndex")
+          : Promise.resolve<WorkoutExercise[]>([]),
+      [activeWorkout]
+    ) ?? [];
 
-  const sets = useLiveQuery(
-    () =>
-      activeWorkout
-        ? db.sets.where("workoutId").equals(activeWorkout.id).toArray()
-        : Promise.resolve([]),
-    [activeWorkout]
-  ) || [];
+  const sets =
+    useLiveQuery<WorkoutSet[]>(
+      () =>
+        activeWorkout
+          ? db.sets.where("workoutId").equals(activeWorkout.id).toArray()
+          : Promise.resolve<WorkoutSet[]>([]),
+      [activeWorkout]
+    ) ?? [];
 
-  // Previous completed sets for ghost values
-  const completedHistorySets = useLiveQuery(() =>
-    db.sets.where("isCompleted").equals(1).toArray()
-  ) || [];
+  const completedHistorySets =
+    useLiveQuery<WorkoutSet[]>(
+      () => db.sets.where("isCompleted").equals(1).toArray(),
+      []
+    ) ?? [];
 
-  const exercises = useLiveQuery(() => db.exercises.toArray()) || [];
+  const exercises =
+    useLiveQuery<Exercise[]>(() => db.exercises.toArray(), []) ?? [];
   const exerciseMap = new Map(exercises.map((e) => [e.id, e]));
 
   const {
@@ -52,8 +61,6 @@ export default function ActiveWorkoutView() {
     skipTimer,
     addThirtySeconds,
   } = useRestTimer();
-
-  const [showExerciseSelector, setShowExerciseSelector] = useState(false);
 
   if (!activeWorkout) {
     return (
@@ -70,7 +77,7 @@ export default function ActiveWorkoutView() {
               isCompleted: false,
             });
           }}
-          className="bg-white text-black font-semibold px-4 py-2 rounded-xl text-sm"
+          className="bg-white text-black font-semibold px-4 py-2 rounded-xl text-sm hover:bg-zinc-200 transition-colors"
         >
           Start Empty Workout
         </button>
@@ -131,31 +138,39 @@ export default function ActiveWorkoutView() {
 
   return (
     <div className="space-y-4 pb-28">
-      {/* Top Controls */}
+      {/* Top Header & Actions */}
       <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
-        <button onClick={() => router.back()} className="text-zinc-400 hover:text-white">
+        <button
+          onClick={() => router.back()}
+          className="text-zinc-400 hover:text-white transition-colors"
+        >
           <ArrowLeft className="w-5 h-5" />
         </button>
-        <h1 className="text-base font-bold text-white">{activeWorkout.title}</h1>
+        <h1 className="text-base font-bold text-white truncate max-w-[180px]">
+          {activeWorkout.title}
+        </h1>
         <div className="flex items-center gap-2">
-          {/* Rest Timer Toggle */}
           <button
             onClick={() => setRestTimerEnabled(!restTimerEnabled)}
-            title={restTimerEnabled ? "Rest Timer On" : "Rest Timer Off"}
-            className="p-1.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-300"
+            title={restTimerEnabled ? "Rest Timer Enabled" : "Rest Timer Disabled"}
+            className="p-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-300 hover:border-zinc-700 transition-colors"
           >
-            {restTimerEnabled ? <Timer className="w-4 h-4 text-emerald-400" /> : <TimerOff className="w-4 h-4 text-zinc-500" />}
+            {restTimerEnabled ? (
+              <Timer className="w-4 h-4 text-emerald-400" />
+            ) : (
+              <TimerOff className="w-4 h-4 text-zinc-500" />
+            )}
           </button>
           <button
             onClick={handleFinishWorkout}
-            className="bg-white text-black font-semibold text-xs px-3 py-1.5 rounded-lg flex items-center gap-1 shadow-sm transition-all"
+            className="bg-white text-black font-semibold text-xs px-3 py-1.5 rounded-lg flex items-center gap-1 shadow-sm hover:bg-zinc-200 transition-all active:scale-95"
           >
             <CheckCheck className="w-4 h-4" /> Finish
           </button>
         </div>
       </div>
 
-      {/* Exercises */}
+      {/* Exercises Section */}
       <div className="space-y-4">
         {workoutExercises.map((we) => {
           const exercise = exerciseMap.get(we.exerciseId);
@@ -163,24 +178,33 @@ export default function ActiveWorkoutView() {
             .filter((s) => s.workoutExerciseId === we.id)
             .sort((a, b) => a.setIndex - b.setIndex);
 
-          // Get past sets for ghost reference
           const pastSets = completedHistorySets
-            .filter((s) => s.exerciseId === we.exerciseId && s.workoutId !== activeWorkout.id)
+            .filter(
+              (s) =>
+                s.exerciseId === we.exerciseId && s.workoutId !== activeWorkout.id
+            )
             .slice(-exerciseSets.length);
 
           return (
-            <div key={we.id} className="bg-zinc-950 border border-zinc-800 rounded-2xl p-3 space-y-3">
+            <div
+              key={we.id}
+              className="bg-zinc-950 border border-zinc-800 rounded-2xl p-3 space-y-3"
+            >
               <div className="flex justify-between items-center px-1">
                 <div>
-                  <h3 className="font-semibold text-white text-sm">{exercise?.name || "Exercise"}</h3>
-                  <span className="text-[10px] text-zinc-500">{exercise?.targetMuscle} • {exercise?.equipment}</span>
+                  <h3 className="font-semibold text-white text-sm">
+                    {exercise?.name || "Exercise"}
+                  </h3>
+                  <span className="text-[10px] text-zinc-500">
+                    {exercise?.targetMuscle} • {exercise?.equipment}
+                  </span>
                 </div>
                 <button
                   onClick={async () => {
                     await db.workoutExercises.delete(we.id);
                     await db.sets.where("workoutExerciseId").equals(we.id).delete();
                   }}
-                  className="text-zinc-600 hover:text-white p-1"
+                  className="text-zinc-600 hover:text-white p-1 transition-colors"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -221,7 +245,7 @@ export default function ActiveWorkoutView() {
 
               <button
                 onClick={() => handleAddSet(we)}
-                className="w-full py-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-lg text-xs font-semibold text-zinc-300 flex items-center justify-center gap-1"
+                className="w-full py-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-lg text-xs font-semibold text-zinc-300 flex items-center justify-center gap-1 transition-colors"
               >
                 <Plus className="w-3.5 h-3.5" /> Add Set
               </button>
@@ -237,24 +261,31 @@ export default function ActiveWorkoutView() {
         <Plus className="w-4 h-4" /> Add Exercise
       </button>
 
-      {/* Exercise Selector */}
+      {/* Exercise Picker Modal */}
       {showExerciseSelector && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end">
           <div className="bg-zinc-900 border-t border-zinc-800 rounded-t-2xl p-4 max-h-[80vh] flex flex-col pb-24">
             <div className="flex justify-between items-center pb-3 border-b border-zinc-800">
-              <h2 className="font-semibold text-sm">Select Exercise</h2>
-              <button onClick={() => setShowExerciseSelector(false)} className="text-xs text-zinc-400">Close</button>
+              <h2 className="font-semibold text-sm text-white">Select Exercise</h2>
+              <button
+                onClick={() => setShowExerciseSelector(false)}
+                className="text-xs text-zinc-400 hover:text-white"
+              >
+                Close
+              </button>
             </div>
             <div className="overflow-y-auto py-2 divide-y divide-zinc-800/50">
               {exercises.map((e) => (
                 <div
                   key={e.id}
                   onClick={() => handleAddExerciseToWorkout(e)}
-                  className="py-3 px-2 flex justify-between items-center hover:bg-zinc-800 rounded cursor-pointer"
+                  className="py-3 px-2 flex justify-between items-center hover:bg-zinc-800 rounded cursor-pointer transition-colors"
                 >
                   <div>
                     <p className="text-sm font-medium text-white">{e.name}</p>
-                    <span className="text-xs text-zinc-500">{e.targetMuscle} • {e.equipment}</span>
+                    <span className="text-xs text-zinc-500">
+                      {e.targetMuscle} • {e.equipment}
+                    </span>
                   </div>
                   <Plus className="w-4 h-4 text-zinc-400" />
                 </div>
