@@ -111,8 +111,8 @@ export default function LandingPage() {
         </div>
       </div>
 
-      {/* Auth Actions */}
-      <div className="space-y-3">
+      {/* Auth Actions with explicit top margin */}
+      <div className="mt-8 space-y-3">
         {statusMessage && (
           <p className="text-xs text-center text-zinc-400 animate-pulse">{statusMessage}</p>
         )}
