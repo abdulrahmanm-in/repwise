@@ -1,41 +1,114 @@
+// src/app/settings/page.tsx
 "use client";
 
-import { useState } from "react";
-import { useLiveQuery } from "dexie-react-hooks";
-import { db } from "@/db/database";
-import { MuscleGroup, EquipmentType } from "@/types";
-import { Download, Upload, Cloud, HardDrive, Check, AlertCircle, Plus, X } from "lucide-react";
+import { useState, useEffect } from "react";
+import Image from "next/image";
+import {
+  Download,
+  Upload,
+  Cloud,
+  HardDrive,
+  Check,
+  AlertCircle,
+  Smartphone,
+  Share2,
+  LogOut,
+  RefreshCw,
+} from "lucide-react";
 import { exportDatabaseToJSON, importDatabaseFromJSON } from "@/lib/jsonBackup";
-import { requestDriveAuth, uploadBackupToDrive, restoreLatestFromDrive } from "@/lib/driveBackup";
+import {
+  initGoogleAuth,
+  requestDriveAuth,
+  getStoredAccessToken,
+  disconnectGoogleDrive,
+} from "@/lib/driveBackup";
+import {
+  fetchAndStoreGoogleProfile,
+  getStoredUserProfile,
+  clearStoredUserProfile,
+  pullLatestFromDrive,
+  pushLatestToDrive,
+  performFullLogout,
+  GoogleUserProfile,
+} from "@/lib/driveSync";
+import { usePWAInstall } from "@/hooks/usePWAInstall";
 
 export default function SettingsView() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [showAddExercise, setShowAddExercise] = useState(false);
+  const [driveConnected, setDriveConnected] = useState(false);
+  const [userProfile, setUserProfile] = useState<GoogleUserProfile | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
 
-  // New Exercise Form State
-  const [name, setName] = useState("");
-  const [targetMuscle, setTargetMuscle] = useState<MuscleGroup>("Chest");
-  const [equipment, setEquipment] = useState<EquipmentType>("Barbell");
-  const [instructions, setInstructions] = useState("");
+  const { isInstalled, isIOS, canInstall, triggerInstall } = usePWAInstall();
 
-  const settings = useLiveQuery(() => db.settings.get("current"));
-  const exercises = useLiveQuery(() => db.exercises.toArray()) || [];
+  useEffect(() => {
+    const token = getStoredAccessToken();
+    const cachedProfile = getStoredUserProfile();
 
-  const handleCreateExercise = async () => {
-    if (!name.trim()) return;
-    await db.exercises.add({
-      id: `custom_${Date.now()}`,
-      name: name.trim(),
-      targetMuscle,
-      equipment,
-      instructions: instructions.trim() || undefined,
-      isCustom: true,
-      isArchived: false,
+    if (token) {
+      setDriveConnected(true);
+      if (cachedProfile) {
+        setUserProfile(cachedProfile);
+      } else {
+        fetchAndStoreGoogleProfile(token).then((profile) => {
+          if (profile) setUserProfile(profile);
+        });
+      }
+    }
+
+    initGoogleAuth(async (newToken: string) => {
+      setDriveConnected(true);
+      setStatusMessage("Authenticating with Google...");
+
+      const profile = await fetchAndStoreGoogleProfile(newToken);
+      if (profile) setUserProfile(profile);
+
+      setStatusMessage("Checking Google Drive for existing workouts...");
+      setIsSyncing(true);
+      const synced = await pullLatestFromDrive();
+      setIsSyncing(false);
+
+      if (synced) {
+        setStatusMessage("Cloud sync complete! Refreshing interface...");
+        setTimeout(() => window.location.reload(), 1200);
+      } else {
+        setStatusMessage("Signed in! Repwise is synced with your Google Drive.");
+      }
     });
-    setName("");
-    setInstructions("");
-    setShowAddExercise(false);
-    setStatusMessage("Custom exercise created!");
+  }, []);
+
+  const handleDisconnect = () => {
+    disconnectGoogleDrive();
+    clearStoredUserProfile();
+    setDriveConnected(false);
+    setUserProfile(null);
+    setStatusMessage("Disconnected Google account.");
+  };
+
+  const handleManualPush = async () => {
+    setIsSyncing(true);
+    const success = await pushLatestToDrive();
+    setIsSyncing(false);
+    if (success) {
+      setStatusMessage("Latest data successfully saved to Google Drive.");
+    } else {
+      setStatusMessage("Sync failed. Check your network connection.");
+    }
+  };
+
+  const handleManualPull = async () => {
+    if (!confirm("This will replace current local entries with the latest Drive backup. Proceed?")) {
+      return;
+    }
+    setIsSyncing(true);
+    const success = await pullLatestFromDrive();
+    setIsSyncing(false);
+    if (success) {
+      setStatusMessage("Data restored from Drive! Reloading...");
+      setTimeout(() => window.location.reload(), 1200);
+    } else {
+      setStatusMessage("Restore failed or no backup exists yet.");
+    }
   };
 
   const handleExportJSON = async () => {
@@ -71,212 +144,170 @@ export default function SettingsView() {
   return (
     <div className="space-y-6 pb-28">
       <header className="pt-2">
-        <h1 className="text-xl font-bold">Data & Settings</h1>
-        <p className="text-xs text-zinc-400">Manage exercise library and storage</p>
+        <h1 className="text-xl font-bold tracking-tight text-white">Data & Settings</h1>
+        <p className="text-xs text-zinc-400">Manage app installation, cloud sync, and local backups</p>
       </header>
 
       {statusMessage && (
-        <div className="p-3 bg-zinc-900 border border-zinc-700 rounded-xl text-xs text-zinc-200 flex items-center gap-2">
-          <AlertCircle className="w-4 h-4 text-white" />
+        <div className="p-3 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-200 flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 text-white shrink-0" />
           <span>{statusMessage}</span>
         </div>
       )}
 
-      {/* Exercise Library Management */}
+      {/* INSTALL APP ON HOME SCREEN */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-3">
-        <div className="flex justify-between items-center border-b border-zinc-800 pb-2">
-          <span className="text-xs font-semibold text-zinc-300 uppercase">Exercise Library ({exercises.length})</span>
-          <button
-            onClick={() => setShowAddExercise(true)}
-            className="text-xs bg-white text-black font-semibold px-2.5 py-1 rounded-lg flex items-center gap-1"
-          >
-            <Plus className="w-3.5 h-3.5" /> Add Exercise
-          </button>
-        </div>
-        <div className="max-h-40 overflow-y-auto divide-y divide-zinc-800/40 text-xs">
-          {exercises.map((e) => (
-            <div key={e.id} className="py-2 flex justify-between items-center">
-              <div>
-                <p className="text-zinc-200 font-medium">{e.name}</p>
-                <span className="text-[10px] text-zinc-500">{e.targetMuscle} • {e.equipment}</span>
-              </div>
-              {e.isCustom && (
-                <button
-                  onClick={() => db.exercises.delete(e.id)}
-                  className="text-zinc-500 hover:text-rose-400"
-                >
-                  Delete
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* File Backup */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-3">
-        <div className="flex items-center gap-2 pb-2 border-b border-zinc-800">
-          <HardDrive className="w-4 h-4 text-zinc-400" />
-          <h2 className="text-xs uppercase font-semibold text-zinc-300">File Backup</h2>
+        <div className="flex items-center justify-between pb-2 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Smartphone className="w-4 h-4 text-white" />
+            <h2 className="text-xs uppercase font-semibold text-zinc-300">
+              Install Repwise App
+            </h2>
+          </div>
+          {isInstalled && (
+            <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
+              <Check className="w-3 h-3" /> Installed
+            </span>
+          )}
         </div>
 
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            onClick={handleExportJSON}
-            className="flex items-center justify-center gap-2 py-2.5 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl text-xs font-semibold border border-zinc-700"
-          >
-            <Download className="w-3.5 h-3.5" /> Export JSON
-          </button>
-          <label className="flex items-center justify-center gap-2 py-2.5 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl text-xs font-semibold border border-zinc-700 cursor-pointer">
-            <Upload className="w-3.5 h-3.5" /> Import JSON
-            <input type="file" accept=".json" onChange={handleImportJSON} className="hidden" />
-          </label>
-        </div>
-      </div>
-
-      {/* Cloud Integration */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-3">
-        <div className="flex items-center gap-2 pb-2 border-b border-zinc-800">
-          <Cloud className="w-4 h-4 text-white" />
-          <h2 className="text-xs uppercase font-semibold text-zinc-300">Google Drive AppData</h2>
-        </div>
-
-        {!settings?.googleDriveLinked ? (
-          <button
-            onClick={async () => {
-              try {
-                await requestDriveAuth();
-                setStatusMessage("Google Drive successfully connected!");
-              } catch (err: any) {
-                setStatusMessage(err.message || "Failed to connect Google Account.");
-              }
-            }}
-            className="w-full py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-xl text-xs font-semibold text-zinc-200 flex items-center justify-center gap-2"
-          >
-            Connect Google Account
-          </button>
+        {isInstalled ? (
+          <p className="text-xs text-zinc-400 leading-relaxed">
+            Repwise is currently installed and running as a standalone app on your device.
+          </p>
+        ) : canInstall ? (
+          <div className="space-y-2">
+            <p className="text-xs text-zinc-400 leading-relaxed">
+              Install Repwise to your home screen for instant offline gym access, faster navigation, and a native app display.
+            </p>
+            <button
+              onClick={triggerInstall}
+              className="w-full py-2.5 bg-white text-black hover:bg-zinc-200 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all active:scale-[0.99] shadow-sm"
+            >
+              <Download className="w-4 h-4" /> Add to Home Screen
+            </button>
+          </div>
+        ) : isIOS ? (
+          <div className="space-y-2 text-xs text-zinc-400 leading-relaxed bg-zinc-950 border border-zinc-800/80 p-3 rounded-xl">
+            <p className="font-semibold text-zinc-200 flex items-center gap-1.5">
+              <Share2 className="w-3.5 h-3.5 text-white" /> How to install on iOS:
+            </p>
+            <ol className="list-decimal list-inside space-y-1 text-zinc-400 pl-1">
+              <li>Tap the <span className="text-white font-medium">Share</span> button at the bottom of Safari.</li>
+              <li>Scroll down and tap <span className="text-white font-medium">Add to Home Screen</span>.</li>
+              <li>Tap <span className="text-white font-medium">Add</span> in the top-right corner.</li>
+            </ol>
+          </div>
         ) : (
           <div className="space-y-2">
-            <div className="flex items-center gap-1.5 text-xs text-emerald-400 pb-1">
-              <Check className="w-3.5 h-3.5" /> Connected to Google Drive
+            <p className="text-xs text-zinc-400 leading-relaxed">
+              Open your browser menu (the three dots in the top right corner) and tap <span className="text-white font-medium">Install app</span> or <span className="text-white font-medium">Add to Home screen</span>.
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* GOOGLE DRIVE SYNC CARD */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-4">
+        <div className="flex items-center justify-between pb-2 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Cloud className="w-4 h-4 text-white" />
+            <h2 className="text-xs uppercase font-semibold text-zinc-300">
+              Cloud Storage (Google Drive)
+            </h2>
+          </div>
+          {driveConnected && (
+            <button
+              onClick={handleDisconnect}
+              className="text-[11px] text-zinc-400 hover:text-rose-400 flex items-center gap-1 transition-colors"
+            >
+              <LogOut className="w-3 h-3" /> Disconnect
+            </button>
+          )}
+        </div>
+
+        {!driveConnected ? (
+          <div className="space-y-3">
+            <p className="text-xs text-zinc-400 leading-relaxed">
+              Connect your Google account to automatically preserve your routines and workouts directly inside your private Google Drive app storage.
+            </p>
+            <button
+              onClick={requestDriveAuth}
+              className="w-full py-2.5 bg-white text-black hover:bg-zinc-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all active:scale-[0.99]"
+            >
+              Sign In with Google
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {userProfile && (
+              <div className="flex items-center gap-3 bg-zinc-950 border border-zinc-800 p-3 rounded-xl">
+                {userProfile.picture ? (
+                  <Image
+                    src={userProfile.picture}
+                    alt={userProfile.name}
+                    width={40}
+                    height={40}
+                    className="rounded-full border border-zinc-700"
+                  />
+                ) : (
+                  <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center font-bold text-sm text-white">
+                    {userProfile.name.charAt(0)}
+                  </div>
+                )}
+                <div className="overflow-hidden">
+                  <p className="text-xs font-bold text-white truncate">{userProfile.name}</p>
+                  <p className="text-[11px] text-zinc-400 truncate">{userProfile.email}</p>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center gap-1.5 text-xs text-emerald-400">
+              <Check className="w-3.5 h-3.5" />
+              <span>Auto-sync active across workouts</span>
             </div>
-            <div className="grid grid-cols-2 gap-2">
+
+            <div className="grid grid-cols-2 gap-2 pt-1">
               <button
-                onClick={async () => {
-                  try {
-                    await uploadBackupToDrive();
-                    setStatusMessage("Drive backup uploaded successfully.");
-                  } catch (e: any) {
-                    setStatusMessage(e.message);
-                  }
-                }}
-                className="py-2 bg-white text-black hover:bg-zinc-200 rounded-xl text-xs font-semibold"
+                disabled={isSyncing}
+                onClick={handleManualPush}
+                className="py-2.5 bg-white text-black hover:bg-zinc-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-50 transition-all"
               >
-                Upload to Drive
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? "animate-spin" : ""}`} />
+                Push to Drive
               </button>
               <button
-                onClick={async () => {
-                  if (confirm("Replace local data with latest Drive backup?")) {
-                    try {
-                      await restoreLatestFromDrive();
-                      setStatusMessage("Data restored from Drive! Reloading...");
-                      setTimeout(() => window.location.reload(), 1500);
-                    } catch (e: any) {
-                      setStatusMessage(e.message);
-                    }
-                  }
-                }}
-                className="py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 rounded-xl text-xs font-semibold"
+                disabled={isSyncing}
+                onClick={handleManualPull}
+                className="py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-50 transition-all"
               >
-                Restore from Drive
+                Pull from Drive
               </button>
             </div>
           </div>
         )}
       </div>
 
-      {/* CREATE CUSTOM EXERCISE MODAL (Fixed Submit Button Visibility) */}
-      {showAddExercise && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end">
-          <div className="bg-zinc-900 border-t border-zinc-800 rounded-t-2xl p-5 max-h-[85vh] flex flex-col space-y-4 pb-28 overflow-y-auto">
-            <div className="flex justify-between items-center border-b border-zinc-800 pb-3">
-              <h2 className="font-bold text-base text-white">Create Custom Exercise</h2>
-              <button onClick={() => setShowAddExercise(false)} className="text-zinc-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div>
-              <label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider block mb-1">
-                Exercise Name *
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. Bulgarian Split Squat"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white outline-none focus:border-white"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider block mb-1">
-                  Target Muscle
-                </label>
-                <select
-                  value={targetMuscle}
-                  onChange={(e) => setTargetMuscle(e.target.value as MuscleGroup)}
-                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white outline-none"
-                >
-                  {["Chest", "Back", "Legs", "Shoulders", "Arms", "Core"].map((m) => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider block mb-1">
-                  Equipment
-                </label>
-                <select
-                  value={equipment}
-                  onChange={(e) => setEquipment(e.target.value as EquipmentType)}
-                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white outline-none"
-                >
-                  {["Barbell", "Dumbbell", "Cable", "Machine", "Bodyweight"].map((eq) => (
-                    <option key={eq} value={eq}>{eq}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div>
-              <label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider block mb-1">
-                Instructions / Notes
-              </label>
-              <textarea
-                placeholder="Form cues, bench angles, grip width..."
-                value={instructions}
-                onChange={(e) => setInstructions(e.target.value)}
-                rows={2}
-                className="w-full bg-zinc-950 border border-zinc-700 rounded-xl p-3 text-sm text-white outline-none focus:border-white"
-              />
-            </div>
-
-            {/* Clearly Visible Submit Button */}
-            <div className="pt-2">
-              <button
-                disabled={!name.trim()}
-                onClick={handleCreateExercise}
-                className="w-full py-3 bg-white text-black font-bold rounded-xl text-sm disabled:opacity-40 disabled:cursor-not-allowed hover:bg-zinc-200 transition-all shadow-md active:scale-[0.98]"
-              >
-                Save Exercise
-              </button>
-            </div>
-          </div>
+      {/* OFFLINE JSON FILE BACKUP */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-3">
+        <div className="flex items-center gap-2 pb-2 border-b border-zinc-800">
+          <HardDrive className="w-4 h-4 text-zinc-400" />
+          <h2 className="text-xs uppercase font-semibold text-zinc-300">Offline File Backup</h2>
         </div>
-      )}
+
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            onClick={handleExportJSON}
+            className="flex items-center justify-center gap-2 py-2.5 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl text-xs font-semibold border border-zinc-700 transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" /> Export JSON
+          </button>
+          <label className="flex items-center justify-center gap-2 py-2.5 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl text-xs font-semibold border border-zinc-700 cursor-pointer transition-colors">
+            <Upload className="w-3.5 h-3.5" /> Import JSON
+            <input type="file" accept=".json" onChange={handleImportJSON} className="hidden" />
+          </label>
+        </div>
+      </div>
     </div>
   );
 }

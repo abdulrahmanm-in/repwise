@@ -51,3 +51,33 @@ class RepwiseDB extends Dexie {
 }
 
 export const db = new RepwiseDB();
+
+export async function ensureExercisesSeeded() {
+  try {
+    // 1. Seed or update built-in exercises in a single atomic transaction
+    const existingIds = new Set(await db.exercises.toCollection().primaryKeys());
+    const missingExercises = BUILTIN_EXERCISES.filter(
+      (ex) => !existingIds.has(ex.id)
+    );
+
+    if (missingExercises.length > 0) {
+      await db.exercises.bulkPut(missingExercises);
+    }
+
+    // 2. Guarantee default user settings record exists
+    const settingsExist = await db.settings.get("current");
+    if (!settingsExist) {
+      await db.settings.put({
+        id: "current",
+        weightUnit: "kg",
+        defaultRestTimeSeconds: 90,
+        soundEnabled: true,
+        vibrateEnabled: true,
+        theme: "dark",
+        googleDriveLinked: false,
+      });
+    }
+  } catch (error) {
+    console.error("Failed to verify database seeds:", error);
+  }
+}

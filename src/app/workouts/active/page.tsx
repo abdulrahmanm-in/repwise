@@ -1,56 +1,128 @@
+// src/app/workouts/active/page.tsx
 "use client";
 
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "@/db/database";
-import { WorkoutExercise, Exercise, WorkoutSet } from "@/types";
+import { WorkoutExercise, WorkoutSet, Exercise, Workout, RoutineItem, MuscleGroup } from "@/types";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, CheckCheck, Trash2, ArrowLeft, Timer, TimerOff } from "lucide-react";
+import {
+  Plus,
+  CheckCheck,
+  Trash2,
+  ArrowLeft,
+  Calendar,
+  BookmarkPlus,
+  Search,
+  Check,
+  RefreshCw,
+} from "lucide-react";
 import SetRow from "@/components/SetRow";
 import RestTimerModal from "@/components/RestTimerModal";
 import { useRestTimer } from "@/hooks/useRestTimer";
 import { calculateWorkoutVolume } from "@/lib/formulas";
+import { pushLatestToDrive, triggerAutoSync } from "@/lib/driveSync";
+import clsx from "clsx";
+
+const MUSCLE_GROUPS: (MuscleGroup | "All")[] = [
+  "All",
+  "Chest",
+  "Back",
+  "Legs",
+  "Shoulders",
+  "Arms",
+  "Core",
+];
 
 export default function ActiveWorkoutView() {
   const router = useRouter();
-  const [restTimerEnabled, setRestTimerEnabled] = useState(true);
-  const [showExerciseSelector, setShowExerciseSelector] = useState(false);
 
-  const activeWorkout = useLiveQuery(
+  const activeWorkout = useLiveQuery<Workout | undefined>(
     () => db.workouts.filter((w) => !w.isCompleted).first(),
     []
   );
 
-  const workoutExercises =
-    useLiveQuery<WorkoutExercise[]>(
-      () =>
-        activeWorkout
-          ? db.workoutExercises
-              .where("workoutId")
-              .equals(activeWorkout.id)
-              .sortBy("orderIndex")
-          : Promise.resolve<WorkoutExercise[]>([]),
-      [activeWorkout]
-    ) ?? [];
+  const workoutExercises = useLiveQuery<WorkoutExercise[]>(
+    () =>
+      activeWorkout
+        ? db.workoutExercises
+            .where("workoutId")
+            .equals(activeWorkout.id)
+            .sortBy("orderIndex")
+        : Promise.resolve([]),
+    [activeWorkout]
+  ) || [];
 
-  const sets =
-    useLiveQuery<WorkoutSet[]>(
-      () =>
-        activeWorkout
-          ? db.sets.where("workoutId").equals(activeWorkout.id).toArray()
-          : Promise.resolve<WorkoutSet[]>([]),
-      [activeWorkout]
-    ) ?? [];
+  const sets = useLiveQuery<WorkoutSet[]>(
+    () =>
+      activeWorkout
+        ? db.sets.where("workoutId").equals(activeWorkout.id).toArray()
+        : Promise.resolve([]),
+    [activeWorkout]
+  ) || [];
 
-  const completedHistorySets =
-    useLiveQuery<WorkoutSet[]>(
-      () => db.sets.where("isCompleted").equals(1).toArray(),
-      []
-    ) ?? [];
-
-  const exercises =
-    useLiveQuery<Exercise[]>(() => db.exercises.toArray(), []) ?? [];
+  const exercises = useLiveQuery<Exercise[]>(() => db.exercises.toArray(), []) || [];
   const exerciseMap = new Map(exercises.map((e) => [e.id, e]));
+
+  // Ghost Values map
+  const previousPerformanceMap = useLiveQuery(async () => {
+    const map = new Map<string, WorkoutSet[]>();
+    const completedWorkouts = await db.workouts
+      .filter((w) => Boolean(w.isCompleted) && Boolean(w.endTime))
+      .toArray();
+
+    completedWorkouts.sort((a, b) => (b.endTime || 0) - (a.endTime || 0));
+
+    for (const ex of exercises) {
+      for (const cw of completedWorkouts) {
+        const foundSets = await db.sets
+          .where("workoutId")
+          .equals(cw.id)
+          .filter((s) => s.exerciseId === ex.id && Boolean(s.isCompleted))
+          .sortBy("setIndex");
+
+        if (foundSets.length > 0) {
+          map.set(ex.id, foundSets);
+          break;
+        }
+      }
+    }
+    return map;
+  }, [exercises]);
+
+  // Read original template items if this workout originated from a routine
+  const originalRoutineItems = useLiveQuery<RoutineItem[]>(async () => {
+    if (!activeWorkout?.routineId) return [];
+    return db.routineItems
+      .where("routineId")
+      .equals(activeWorkout.routineId)
+      .sortBy("orderIndex");
+  }, [activeWorkout?.routineId]) || [];
+
+  // Check if current workout differs from the saved routine template
+  const isRoutineModified = (() => {
+    if (!activeWorkout?.routineId || originalRoutineItems.length === 0) return false;
+
+    // Check if exercise count differs
+    if (workoutExercises.length !== originalRoutineItems.length) return true;
+
+    // Check if any exercise or set count differs
+    for (let i = 0; i < workoutExercises.length; i++) {
+      const we = workoutExercises[i];
+      const orig = originalRoutineItems[i];
+      if (!orig || we.exerciseId !== orig.exerciseId) return true;
+
+      const currentExSets = sets.filter((s) => s.workoutExerciseId === we.id);
+      if (currentExSets.length !== orig.targetSets) return true;
+    }
+
+    return false;
+  })();
+
+  const [showExerciseSelector, setShowExerciseSelector] = useState(false);
+  const [selectedMuscle, setSelectedMuscle] = useState<MuscleGroup | "All">("All");
+  const [searchExercise, setSearchExercise] = useState("");
+  const [selectedExerciseIds, setSelectedExerciseIds] = useState<string[]>([]);
 
   const {
     secondsRemaining,
@@ -67,35 +139,132 @@ export default function ActiveWorkoutView() {
       <div className="text-center py-16 space-y-4">
         <p className="text-sm text-zinc-400">No active workout session found.</p>
         <button
-          onClick={async () => {
-            const id = `w_${Date.now()}`;
-            await db.workouts.add({
-              id,
-              title: "Quick Workout",
-              startTime: Date.now(),
-              totalVolumeKg: 0,
-              isCompleted: false,
-            });
-          }}
-          className="bg-white text-black font-semibold px-4 py-2 rounded-xl text-sm hover:bg-zinc-200 transition-colors"
+          onClick={() => router.push("/")}
+          className="bg-white text-black font-bold px-4 py-2 rounded-xl text-sm"
         >
-          Start Empty Workout
+          Go to Dashboard
         </button>
       </div>
     );
   }
 
-  const handleFinishWorkout = async () => {
-    const totalVolume = calculateWorkoutVolume(sets);
+  const currentIsoDate = new Date(activeWorkout.startTime)
+    .toISOString()
+    .split("T")[0];
+
+  const handleDateChange = async (dateStr: string) => {
+    if (!dateStr) return;
+    const [year, month, day] = dateStr.split("-").map(Number);
+    const updatedDate = new Date(year, month - 1, day, 12, 0, 0);
+
     await db.workouts.update(activeWorkout.id, {
-      endTime: Date.now(),
+      startTime: updatedDate.getTime(),
+    });
+    triggerAutoSync();
+  };
+
+  const handleDiscardWorkout = async () => {
+    const shouldDiscard = confirm(
+      "Are you sure you want to discard this workout session? All logged data in this session will be deleted."
+    );
+    if (!shouldDiscard) return;
+
+    await db.workouts.delete(activeWorkout.id);
+    await db.workoutExercises
+      .where("workoutId")
+      .equals(activeWorkout.id)
+      .delete();
+    await db.sets.where("workoutId").equals(activeWorkout.id).delete();
+
+    router.push("/");
+  };
+
+  // Sync current exercises back to the routine template
+  const syncWorkoutToRoutineTemplate = async (routineId: string) => {
+    await db.routineItems.where("routineId").equals(routineId).delete();
+
+    for (let i = 0; i < workoutExercises.length; i++) {
+      const we = workoutExercises[i];
+      const exSets = sets.filter((s) => s.workoutExerciseId === we.id);
+      const targetWeight = exSets[0]?.weightKg || 0;
+      const targetReps = exSets[0]?.reps || 10;
+
+      await db.routineItems.add({
+        id: `ri_${Date.now()}_${i}`,
+        routineId,
+        exerciseId: we.exerciseId,
+        orderIndex: i + 1,
+        targetSets: Math.max(exSets.length, 1),
+        targetReps,
+        targetWeightKg: targetWeight,
+        restSeconds: 90,
+      });
+    }
+  };
+
+  const handleFinishWorkout = async () => {
+    // If routine was modified, prompt user whether to save changes to template
+    if (activeWorkout.routineId && isRoutineModified) {
+      const shouldUpdate = confirm(
+        "You modified exercises or sets in this planned routine. Would you like to update the saved routine template as well?"
+      );
+      if (shouldUpdate) {
+        await syncWorkoutToRoutineTemplate(activeWorkout.routineId);
+      }
+    }
+
+    const totalVolume = calculateWorkoutVolume(sets);
+    const baseDate = new Date(activeWorkout.startTime);
+    const finishTimestamp = new Date(
+      baseDate.getFullYear(),
+      baseDate.getMonth(),
+      baseDate.getDate(),
+      new Date().getHours(),
+      new Date().getMinutes()
+    ).getTime();
+
+    await db.workouts.update(activeWorkout.id, {
+      endTime: finishTimestamp,
       totalVolumeKg: totalVolume,
       isCompleted: true,
     });
+
+    pushLatestToDrive().catch(() => {});
     router.push("/workouts");
   };
 
-  const handleAddExerciseToWorkout = async (exercise: Exercise) => {
+  const handleSaveAsRoutine = async () => {
+    if (workoutExercises.length === 0) {
+      alert("Add at least one exercise before saving as a routine.");
+      return;
+    }
+
+    const title = prompt("Save as Routine Name:", activeWorkout.title);
+    if (!title?.trim()) return;
+
+    const newRoutineId = `rt_${Date.now()}`;
+    await db.routines.add({
+      id: newRoutineId,
+      title: title.trim(),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    await syncWorkoutToRoutineTemplate(newRoutineId);
+
+    await db.workouts.update(activeWorkout.id, {
+      routineId: newRoutineId,
+    });
+
+    alert(`Saved "${title.trim()}" to Routines!`);
+    triggerAutoSync();
+  };
+
+  const handleAddSingleExercise = async (exercise: Exercise) => {
+    const prevSets = previousPerformanceMap?.get(exercise.id) || [];
+    const prefillWeight = prevSets[0]?.weightKg || 0;
+    const prefillReps = prevSets[0]?.reps || 10;
+
     const weId = `we_${Date.now()}_${exercise.id}`;
     await db.workoutExercises.add({
       id: weId,
@@ -111,12 +280,45 @@ export default function ActiveWorkoutView() {
       exerciseId: exercise.id,
       setIndex: 1,
       setType: "normal",
-      weightKg: 0,
-      reps: 0,
+      weightKg: prefillWeight,
+      reps: prefillReps,
       isCompleted: false,
     });
 
     setShowExerciseSelector(false);
+    triggerAutoSync();
+  };
+
+  const handleAddMultipleExercises = async () => {
+    for (const id of selectedExerciseIds) {
+      const prevSets = previousPerformanceMap?.get(id) || [];
+      const prefillWeight = prevSets[0]?.weightKg || 0;
+      const prefillReps = prevSets[0]?.reps || 10;
+
+      const weId = `we_${Date.now()}_${id}`;
+      await db.workoutExercises.add({
+        id: weId,
+        workoutId: activeWorkout.id,
+        exerciseId: id,
+        orderIndex: workoutExercises.length + 1,
+      });
+
+      await db.sets.add({
+        id: `s_${Date.now()}_${id}_1`,
+        workoutExerciseId: weId,
+        workoutId: activeWorkout.id,
+        exerciseId: id,
+        setIndex: 1,
+        setType: "normal",
+        weightKg: prefillWeight,
+        reps: prefillReps,
+        isCompleted: false,
+      });
+    }
+
+    setSelectedExerciseIds([]);
+    setShowExerciseSelector(false);
+    triggerAutoSync();
   };
 
   const handleAddSet = async (we: WorkoutExercise) => {
@@ -134,43 +336,91 @@ export default function ActiveWorkoutView() {
       reps: lastSet ? lastSet.reps : 0,
       isCompleted: false,
     });
+
+    triggerAutoSync();
   };
+
+  const filteredPickerExercises = exercises.filter((e) => {
+    const matchesSearch =
+      e.name.toLowerCase().includes(searchExercise.toLowerCase()) ||
+      e.equipment.toLowerCase().includes(searchExercise.toLowerCase());
+    const matchesMuscle =
+      selectedMuscle === "All" || e.targetMuscle === selectedMuscle;
+    return matchesSearch && matchesMuscle;
+  });
 
   return (
     <div className="space-y-4 pb-28">
-      {/* Top Header & Actions */}
+      {/* Session Top Bar */}
       <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
-        <button
-          onClick={() => router.back()}
-          className="text-zinc-400 hover:text-white transition-colors"
-        >
+        <button onClick={() => router.back()} className="text-zinc-400 hover:text-white">
           <ArrowLeft className="w-5 h-5" />
         </button>
-        <h1 className="text-base font-bold text-white truncate max-w-[180px]">
-          {activeWorkout.title}
-        </h1>
-        <div className="flex items-center gap-2">
+
+        <div className="flex-1 mx-3">
+          <input
+            type="text"
+            value={activeWorkout.title}
+            onChange={(e) => {
+              db.workouts.update(activeWorkout.id, { title: e.target.value });
+            }}
+            placeholder="Workout Title"
+            className="w-full bg-transparent font-bold text-sm text-white outline-none border-b border-transparent focus:border-zinc-500 pb-0.5"
+          />
+        </div>
+
+        <div className="flex items-center gap-1.5">
           <button
-            onClick={() => setRestTimerEnabled(!restTimerEnabled)}
-            title={restTimerEnabled ? "Rest Timer Enabled" : "Rest Timer Disabled"}
-            className="p-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-300 hover:border-zinc-700 transition-colors"
+            onClick={handleDiscardWorkout}
+            title="Discard Session"
+            className="bg-zinc-900 border border-zinc-800 hover:border-rose-900 hover:text-rose-400 text-zinc-400 font-semibold text-xs px-2.5 py-1.5 rounded-lg flex items-center gap-1 transition-colors"
           >
-            {restTimerEnabled ? (
-              <Timer className="w-4 h-4 text-emerald-400" />
-            ) : (
-              <TimerOff className="w-4 h-4 text-zinc-500" />
-            )}
+            <Trash2 className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={handleFinishWorkout}
-            className="bg-white text-black font-semibold text-xs px-3 py-1.5 rounded-lg flex items-center gap-1 shadow-sm hover:bg-zinc-200 transition-all active:scale-95"
+            className="bg-white text-black hover:bg-zinc-200 font-bold text-xs px-3 py-1.5 rounded-lg flex items-center gap-1 shadow-sm transition-all"
           >
             <CheckCheck className="w-4 h-4" /> Finish
           </button>
         </div>
       </div>
 
-      {/* Exercises Section */}
+      {/* Date Picker & Context-Aware Actions */}
+      <div className="flex justify-between items-center gap-2 bg-zinc-900 border border-zinc-800 p-2.5 rounded-xl">
+        <div className="flex items-center gap-2 text-xs text-zinc-300">
+          <Calendar className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+          <input
+            type="date"
+            value={currentIsoDate}
+            onChange={(e) => handleDateChange(e.target.value)}
+            className="bg-zinc-800 border border-zinc-700 text-white text-xs rounded-lg px-2 py-1 outline-none font-mono"
+          />
+        </div>
+
+        {/* Show 'Save as Routine' for freestyle, or 'Update Routine' ONLY if modified */}
+        {!activeWorkout.routineId ? (
+          <button
+            onClick={handleSaveAsRoutine}
+            className="text-xs bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 px-2.5 py-1 rounded-lg flex items-center gap-1.5 font-medium transition-colors"
+          >
+            <BookmarkPlus className="w-3.5 h-3.5" /> Save as Routine
+          </button>
+        ) : isRoutineModified ? (
+          <button
+            onClick={async () => {
+              await syncWorkoutToRoutineTemplate(activeWorkout.routineId!);
+              alert("Routine template updated!");
+              triggerAutoSync();
+            }}
+            className="text-xs bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 px-2.5 py-1 rounded-lg flex items-center gap-1.5 font-medium transition-colors"
+          >
+            <RefreshCw className="w-3.5 h-3.5" /> Update Routine
+          </button>
+        ) : null}
+      </div>
+
+      {/* Exercises List */}
       <div className="space-y-4">
         {workoutExercises.map((we) => {
           const exercise = exerciseMap.get(we.exerciseId);
@@ -178,12 +428,7 @@ export default function ActiveWorkoutView() {
             .filter((s) => s.workoutExerciseId === we.id)
             .sort((a, b) => a.setIndex - b.setIndex);
 
-          const pastSets = completedHistorySets
-            .filter(
-              (s) =>
-                s.exerciseId === we.exerciseId && s.workoutId !== activeWorkout.id
-            )
-            .slice(-exerciseSets.length);
+          const prevSets = previousPerformanceMap?.get(we.exerciseId) || [];
 
           return (
             <div
@@ -203,13 +448,15 @@ export default function ActiveWorkoutView() {
                   onClick={async () => {
                     await db.workoutExercises.delete(we.id);
                     await db.sets.where("workoutExerciseId").equals(we.id).delete();
+                    triggerAutoSync();
                   }}
-                  className="text-zinc-600 hover:text-white p-1 transition-colors"
+                  className="text-zinc-600 hover:text-rose-400 p-1"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
               </div>
 
+              {/* Set Headers */}
               <div className="grid grid-cols-12 gap-2 text-[10px] uppercase font-semibold text-zinc-500 px-2">
                 <span className="col-span-2 text-center">Set</span>
                 <span className="col-span-3 text-center">Previous</span>
@@ -218,25 +465,30 @@ export default function ActiveWorkoutView() {
                 <span className="col-span-2 text-right">Done</span>
               </div>
 
+              {/* Set Rows */}
               <div className="space-y-1.5">
-                {exerciseSets.map((s, index) => {
-                  const ghost = pastSets[index];
+                {exerciseSets.map((s, idx) => {
+                  const ghostSet = prevSets[idx];
                   return (
                     <SetRow
                       key={s.id}
                       set={s}
-                      previousWeight={ghost?.weightKg}
-                      previousReps={ghost?.reps}
-                      onUpdate={(fields) => db.sets.update(s.id, fields)}
+                      previousWeight={ghostSet?.weightKg}
+                      previousReps={ghostSet?.reps}
+                      onUpdate={async (fields) => {
+                        await db.sets.update(s.id, fields);
+                        triggerAutoSync();
+                      }}
                       onToggleComplete={async () => {
                         const updatedStatus = !s.isCompleted;
                         await db.sets.update(s.id, {
                           isCompleted: updatedStatus,
                           completedAt: updatedStatus ? Date.now() : undefined,
                         });
-                        if (updatedStatus && restTimerEnabled) {
+                        if (updatedStatus) {
                           startTimer(90);
                         }
+                        triggerAutoSync(500);
                       }}
                     />
                   );
@@ -245,7 +497,7 @@ export default function ActiveWorkoutView() {
 
               <button
                 onClick={() => handleAddSet(we)}
-                className="w-full py-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-lg text-xs font-semibold text-zinc-300 flex items-center justify-center gap-1 transition-colors"
+                className="w-full py-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-lg text-xs font-semibold text-zinc-300 flex items-center justify-center gap-1"
               >
                 <Plus className="w-3.5 h-3.5" /> Add Set
               </button>
@@ -254,8 +506,12 @@ export default function ActiveWorkoutView() {
         })}
       </div>
 
+      {/* Add Exercise Trigger Button */}
       <button
-        onClick={() => setShowExerciseSelector(true)}
+        onClick={() => {
+          setSelectedExerciseIds([]);
+          setShowExerciseSelector(true);
+        }}
         className="w-full py-3 border border-dashed border-zinc-800 hover:border-zinc-500 rounded-xl text-xs font-semibold text-zinc-400 hover:text-white transition-colors flex items-center justify-center gap-1.5"
       >
         <Plus className="w-4 h-4" /> Add Exercise
@@ -263,10 +519,10 @@ export default function ActiveWorkoutView() {
 
       {/* Exercise Picker Modal */}
       {showExerciseSelector && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end">
-          <div className="bg-zinc-900 border-t border-zinc-800 rounded-t-2xl p-4 max-h-[80vh] flex flex-col pb-24">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex flex-col justify-end">
+          <div className="bg-zinc-900 border-t border-zinc-800 rounded-t-2xl p-4 max-h-[85vh] flex flex-col pb-16">
             <div className="flex justify-between items-center pb-3 border-b border-zinc-800">
-              <h2 className="font-semibold text-sm text-white">Select Exercise</h2>
+              <h2 className="font-semibold text-sm text-white">Add Exercises</h2>
               <button
                 onClick={() => setShowExerciseSelector(false)}
                 className="text-xs text-zinc-400 hover:text-white"
@@ -274,37 +530,115 @@ export default function ActiveWorkoutView() {
                 Close
               </button>
             </div>
-            <div className="overflow-y-auto py-2 divide-y divide-zinc-800/50">
-              {exercises.map((e) => (
-                <div
-                  key={e.id}
-                  onClick={() => handleAddExerciseToWorkout(e)}
-                  className="py-3 px-2 flex justify-between items-center hover:bg-zinc-800 rounded cursor-pointer transition-colors"
+
+            <div className="pt-3 pb-2">
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  placeholder="Search exercise..."
+                  value={searchExercise}
+                  onChange={(e) => setSearchExercise(e.target.value)}
+                  className="w-full bg-zinc-800 border border-zinc-700 focus:border-white rounded-xl pl-8 pr-3 py-1.5 text-xs text-white outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-1.5 overflow-x-auto pb-2 no-scrollbar">
+              {MUSCLE_GROUPS.map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setSelectedMuscle(m)}
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors",
+                    selectedMuscle === m
+                      ? "bg-white text-black font-bold"
+                      : "bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-zinc-200"
+                  )}
                 >
-                  <div>
-                    <p className="text-sm font-medium text-white">{e.name}</p>
-                    <span className="text-xs text-zinc-500">
-                      {e.targetMuscle} • {e.equipment}
-                    </span>
-                  </div>
-                  <Plus className="w-4 h-4 text-zinc-400" />
-                </div>
+                  {m}
+                </button>
               ))}
             </div>
+
+            <div className="overflow-y-auto py-1 divide-y divide-zinc-800/50 flex-1">
+              {filteredPickerExercises.map((e) => {
+                const isSelected = selectedExerciseIds.includes(e.id);
+                return (
+                  <div
+                    key={e.id}
+                    className="py-2 px-2 flex justify-between items-center hover:bg-zinc-800/60 rounded-lg transition-colors group"
+                  >
+                    <div
+                      onClick={() => handleAddSingleExercise(e)}
+                      className="flex-1 cursor-pointer pr-3"
+                    >
+                      <p className="text-sm font-medium text-white group-hover:underline">
+                        {e.name}
+                      </p>
+                      <span className="text-xs text-zinc-500">
+                        {e.targetMuscle} • {e.equipment}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleAddSingleExercise(e)}
+                        className="p-1.5 bg-zinc-800 hover:bg-zinc-700 rounded-md text-zinc-300 hover:text-white"
+                        title="Add individually"
+                      >
+                        <Plus className="w-4 h-4" />
+                      </button>
+
+                      <div
+                        onClick={() => {
+                          if (isSelected) {
+                            setSelectedExerciseIds(
+                              selectedExerciseIds.filter((id) => id !== e.id)
+                            );
+                          } else {
+                            setSelectedExerciseIds([...selectedExerciseIds, e.id]);
+                          }
+                        }}
+                        className={clsx(
+                          "w-6 h-6 rounded border flex items-center justify-center cursor-pointer transition-colors",
+                          isSelected
+                            ? "bg-white border-white text-black"
+                            : "border-zinc-700 bg-zinc-950 hover:border-zinc-500"
+                        )}
+                        title="Select for bulk add"
+                      >
+                        {isSelected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {selectedExerciseIds.length > 0 && (
+              <div className="pt-3 border-t border-zinc-800">
+                <button
+                  onClick={handleAddMultipleExercises}
+                  className="w-full py-3 bg-white text-black hover:bg-zinc-200 font-bold rounded-xl text-sm transition-all"
+                >
+                  Add Selected ({selectedExerciseIds.length})
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
 
-      {restTimerEnabled && (
-        <RestTimerModal
-          secondsRemaining={secondsRemaining}
-          isRunning={isRunning}
-          onPause={pauseTimer}
-          onResume={resumeTimer}
-          onSkip={skipTimer}
-          onAdd30={addThirtySeconds}
-        />
-      )}
+      {/* Floating Rest Timer */}
+      <RestTimerModal
+        secondsRemaining={secondsRemaining}
+        isRunning={isRunning}
+        onPause={pauseTimer}
+        onResume={resumeTimer}
+        onSkip={skipTimer}
+        onAdd30={addThirtySeconds}
+      />
     </div>
   );
 }
