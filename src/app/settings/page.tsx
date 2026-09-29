@@ -3,6 +3,7 @@
 
 import { useState, useEffect } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import {
   Download,
   Upload,
@@ -14,6 +15,8 @@ import {
   Share2,
   LogOut,
   RefreshCw,
+  ShieldCheck,
+  FileText,
 } from "lucide-react";
 import { exportDatabaseToJSON, importDatabaseFromJSON } from "@/lib/jsonBackup";
 import {
@@ -32,12 +35,21 @@ import {
   GoogleUserProfile,
 } from "@/lib/driveSync";
 import { usePWAInstall } from "@/hooks/usePWAInstall";
+import LoadingOverlay from "@/components/LoadingOverlay";
 
 export default function SettingsView() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [driveConnected, setDriveConnected] = useState(false);
   const [userProfile, setUserProfile] = useState<GoogleUserProfile | null>(null);
-  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncState, setSyncState] = useState<{
+    loading: boolean;
+    message: string;
+    subMessage: string;
+  }>({
+    loading: false,
+    message: "",
+    subMessage: "",
+  });
 
   const { isInstalled, isIOS, canInstall, triggerInstall } = usePWAInstall();
 
@@ -58,19 +70,27 @@ export default function SettingsView() {
 
     initGoogleAuth(async (newToken: string) => {
       setDriveConnected(true);
-      setStatusMessage("Authenticating with Google...");
+      setSyncState({
+        loading: true,
+        message: "Authenticating with Google",
+        subMessage: "Connecting to Google Drive AppData...",
+      });
 
       const profile = await fetchAndStoreGoogleProfile(newToken);
       if (profile) setUserProfile(profile);
 
-      setStatusMessage("Checking Google Drive for existing workouts...");
-      setIsSyncing(true);
+      setSyncState({
+        loading: true,
+        message: "Restoring Workout Data",
+        subMessage: "Fetching latest workout history...",
+      });
+
       const synced = await pullLatestFromDrive();
-      setIsSyncing(false);
+      setSyncState({ loading: false, message: "", subMessage: "" });
 
       if (synced) {
         setStatusMessage("Cloud sync complete! Refreshing interface...");
-        setTimeout(() => window.location.reload(), 1200);
+        setTimeout(() => window.location.reload(), 1000);
       } else {
         setStatusMessage("Signed in! Repwise is synced with your Google Drive.");
       }
@@ -83,16 +103,26 @@ export default function SettingsView() {
     setDriveConnected(false);
     setUserProfile(null);
     setStatusMessage("Disconnected Google account.");
+    window.dispatchEvent(new Event("repwise_auth_changed"));
   };
 
   const handleManualPush = async () => {
-    setIsSyncing(true);
-    const success = await pushLatestToDrive();
-    setIsSyncing(false);
-    if (success) {
-      setStatusMessage("Latest data successfully saved to Google Drive.");
-    } else {
-      setStatusMessage("Sync failed. Check your network connection.");
+    setSyncState({
+      loading: true,
+      message: "Backing Up to Drive",
+      subMessage: "Pushing local workout logs...",
+    });
+    try {
+      const success = await pushLatestToDrive();
+      if (success) {
+        setStatusMessage("Latest data successfully saved to Google Drive.");
+      } else {
+        setStatusMessage("Sync failed. Check your network connection.");
+      }
+    } catch {
+      setStatusMessage("Push failed. Please try again.");
+    } finally {
+      setSyncState({ loading: false, message: "", subMessage: "" });
     }
   };
 
@@ -100,14 +130,23 @@ export default function SettingsView() {
     if (!confirm("This will replace current local entries with the latest Drive backup. Proceed?")) {
       return;
     }
-    setIsSyncing(true);
-    const success = await pullLatestFromDrive();
-    setIsSyncing(false);
-    if (success) {
-      setStatusMessage("Data restored from Drive! Reloading...");
-      setTimeout(() => window.location.reload(), 1200);
-    } else {
-      setStatusMessage("Restore failed or no backup exists yet.");
+    setSyncState({
+      loading: true,
+      message: "Restoring from Drive",
+      subMessage: "Fetching latest workout history...",
+    });
+    try {
+      const success = await pullLatestFromDrive();
+      if (success) {
+        setStatusMessage("Data restored from Drive! Reloading...");
+        setTimeout(() => window.location.reload(), 1000);
+      } else {
+        setStatusMessage("Restore failed or no backup exists yet.");
+      }
+    } catch {
+      setStatusMessage("Pull failed. Please try again.");
+    } finally {
+      setSyncState({ loading: false, message: "", subMessage: "" });
     }
   };
 
@@ -143,6 +182,13 @@ export default function SettingsView() {
 
   return (
     <div className="space-y-6 pb-28">
+      {/* Animated Lifter Loading Overlay for Cloud Operations */}
+      <LoadingOverlay
+        isLoading={syncState.loading}
+        message={syncState.message}
+        subMessage={syncState.subMessage}
+      />
+
       <header className="pt-2">
         <h1 className="text-xl font-bold tracking-tight text-white">Data & Settings</h1>
         <p className="text-xs text-zinc-400">Manage app installation, cloud sync, and local backups</p>
@@ -269,18 +315,19 @@ export default function SettingsView() {
 
             <div className="grid grid-cols-2 gap-2 pt-1">
               <button
-                disabled={isSyncing}
+                disabled={syncState.loading}
                 onClick={handleManualPush}
-                className="py-2.5 bg-white text-black hover:bg-zinc-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-50 transition-all"
+                className="py-2.5 bg-white text-black hover:bg-zinc-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-50 transition-all active:scale-[0.98]"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? "animate-spin" : ""}`} />
+                <RefreshCw className="w-3.5 h-3.5" />
                 Push to Drive
               </button>
               <button
-                disabled={isSyncing}
+                disabled={syncState.loading}
                 onClick={handleManualPull}
-                className="py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-50 transition-all"
+                className="py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-50 transition-colors"
               >
+                <Download className="w-3.5 h-3.5" />
                 Pull from Drive
               </button>
             </div>
@@ -307,6 +354,44 @@ export default function SettingsView() {
             <input type="file" accept=".json" onChange={handleImportJSON} className="hidden" />
           </label>
         </div>
+      </div>
+
+      {/* LOGOUT BUTTON */}
+      <button
+        onClick={() => {
+          if (confirm("Log out completely and return to the login screen?")) {
+            performFullLogout(false);
+            window.location.href = "/";
+          }
+        }}
+        className="w-full py-3 bg-rose-500/10 border border-rose-500/20 hover:bg-rose-500/20 text-rose-400 font-semibold text-xs rounded-xl transition-colors flex items-center justify-center gap-1.5"
+      >
+        <LogOut className="w-4 h-4" />
+        <span>Log Out</span>
+      </button>
+
+      {/* LEGAL & POLICY LINKS (At the end of Settings) */}
+      <div className="pt-2 border-t border-zinc-800/80">
+        <div className="flex items-center justify-center gap-4 text-xs text-zinc-400">
+          <Link
+            href="/terms"
+            className="flex items-center gap-1 hover:text-white transition-colors underline-offset-4 hover:underline"
+          >
+            <FileText className="w-3.5 h-3.5 text-zinc-500" />
+            <span>Terms and Conditions</span>
+          </Link>
+          <span className="text-zinc-700">•</span>
+          <Link
+            href="/privacy"
+            className="flex items-center gap-1 hover:text-white transition-colors underline-offset-4 hover:underline"
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-zinc-500" />
+            <span>Privacy Policy</span>
+          </Link>
+        </div>
+        <p className="text-center text-[10px] text-zinc-600 font-mono mt-2">
+          Repwise • Local-First • Version 1.0.0
+        </p>
       </div>
     </div>
   );

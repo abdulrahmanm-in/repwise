@@ -79,6 +79,10 @@ export default function WorkoutsTab() {
   const exerciseMap = new Map(exercises.map((e) => [e.id, e]));
 
   const handleOpenCreateRoutine = () => {
+    if (routines.length >= 10) {
+      alert("Routine limit reached (maximum 10 routines). Please delete an existing routine to create a new one.");
+      return;
+    }
     setEditingRoutineId(null);
     setRoutineTitle("");
     setPlannedItems([]);
@@ -114,7 +118,8 @@ export default function WorkoutsTab() {
   };
 
   const handleSaveRoutine = async () => {
-    if (!routineTitle.trim()) {
+    const trimmedTitle = routineTitle.trim();
+    if (!trimmedTitle) {
       alert("Please provide a routine name.");
       return;
     }
@@ -123,9 +128,21 @@ export default function WorkoutsTab() {
       return;
     }
 
+    // Check for duplicate routine names (ignoring self if currently editing)
+    const isDuplicate = routines.some(
+      (r) =>
+        r.id !== editingRoutineId &&
+        r.title.trim().toLowerCase() === trimmedTitle.toLowerCase()
+    );
+
+    if (isDuplicate) {
+      alert(`A routine named "${trimmedTitle}" already exists. Please choose a unique name.`);
+      return;
+    }
+
     if (editingRoutineId) {
       await db.routines.update(editingRoutineId, {
-        title: routineTitle.trim(),
+        title: trimmedTitle,
         updatedAt: Date.now(),
       });
       await db.routineItems.where("routineId").equals(editingRoutineId).delete();
@@ -142,10 +159,15 @@ export default function WorkoutsTab() {
         });
       }
     } else {
+      if (routines.length >= 10) {
+        alert("Maximum limit of 10 routines reached.");
+        return;
+      }
+
       const newRoutineId = `rt_${Date.now()}`;
       await db.routines.add({
         id: newRoutineId,
-        title: routineTitle.trim(),
+        title: trimmedTitle,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       });
@@ -182,7 +204,6 @@ export default function WorkoutsTab() {
   };
 
   const executeStartRoutine = async (routine: Routine) => {
-    // Delete any incomplete leftover
     const unfinished = await db.workouts.filter((w) => !w.isCompleted).toArray();
     for (const w of unfinished) {
       await db.workouts.delete(w.id);
@@ -307,7 +328,7 @@ export default function WorkoutsTab() {
         <div className="space-y-3">
           <div className="flex justify-between items-center py-1">
             <span className="text-xs uppercase text-zinc-400 font-semibold tracking-wider">
-              Saved Templates ({routines.length})
+              Saved Templates ({routines.length}/10)
             </span>
             <div className="flex gap-2">
               <button
@@ -494,7 +515,7 @@ export default function WorkoutsTab() {
         </div>
       )}
 
-{/* Routine Planner / Editor Modal */}
+      {/* Routine Planner / Editor Modal (Centered Card with Visible, Fixed Footer) */}
       {isRoutineModalOpen && (
         <div className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 pb-20 select-none">
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 w-full max-w-md h-[82vh] max-h-[640px] flex flex-col shadow-2xl">
