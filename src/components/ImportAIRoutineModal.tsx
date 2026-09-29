@@ -66,7 +66,6 @@ export default function ImportAIRoutineModal({
 
     setImporting(true);
     try {
-      // 1. Fetch current routines to enforce limits and avoid duplicates
       const currentRoutines = await db.routines.toArray();
 
       let clean = jsonInput.trim();
@@ -84,14 +83,12 @@ export default function ImportAIRoutineModal({
         throw new Error("No routines found in JSON array.");
       }
 
-      // Check max limit (10 routines)
       if (currentRoutines.length + routinesArray.length > 10) {
         throw new Error(
           `Routine limit reached. You have ${currentRoutines.length}/10 routines. Importing ${routinesArray.length} would exceed the maximum of 10.`
         );
       }
 
-      // Track existing titles (case-insensitive)
       const existingTitles = new Set(
         currentRoutines.map((r) => r.title.trim().toLowerCase())
       );
@@ -105,7 +102,6 @@ export default function ImportAIRoutineModal({
           throw new Error("A routine is missing a title.");
         }
 
-        // Generate a unique title if a duplicate exists
         let uniqueTitle = r.title.trim();
         let counter = 2;
         while (existingTitles.has(uniqueTitle.toLowerCase())) {
@@ -137,6 +133,7 @@ export default function ImportAIRoutineModal({
                 targetMuscle: "Chest",
                 equipment: "Other",
                 isCustom: true,
+                isArchived: false,
               };
               await db.exercises.add(exercise);
               exerciseMap.set(exName.toLowerCase(), exercise);
