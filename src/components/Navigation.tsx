@@ -1,13 +1,44 @@
 // src/components/Navigation.tsx
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LayoutDashboard, Dumbbell, TrendingUp, Settings } from "lucide-react";
 import clsx from "clsx";
+import { getStoredAccessToken } from "@/lib/driveBackup";
 
 export default function Navigation() {
   const pathname = usePathname();
+  const [hasAuth, setHasAuth] = useState<boolean>(false);
+  const [mounted, setMounted] = useState<boolean>(false);
+
+  useEffect(() => {
+    setMounted(true);
+
+    const syncAuth = () => {
+      const token = getStoredAccessToken();
+      const guest = localStorage.getItem("repwise_guest_mode") === "true";
+      setHasAuth(Boolean(token || guest));
+    };
+
+    // Run check immediately on mount and on route change
+    syncAuth();
+
+    // Listen for custom in-tab auth updates as well as cross-tab storage events
+    window.addEventListener("repwise_auth_changed", syncAuth);
+    window.addEventListener("storage", syncAuth);
+
+    return () => {
+      window.removeEventListener("repwise_auth_changed", syncAuth);
+      window.removeEventListener("storage", syncAuth);
+    };
+  }, [pathname]);
+
+  // Don't render until client mounts, and hide on landing screen if unauthenticated
+  if (!mounted || (pathname === "/" && !hasAuth)) {
+    return null;
+  }
 
   const links = [
     { label: "Dashboard", href: "/", icon: LayoutDashboard },

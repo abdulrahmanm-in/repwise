@@ -1,7 +1,7 @@
 // src/app/page.tsx
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
@@ -10,7 +10,6 @@ import {
   Trophy,
   Cloud,
   Dumbbell,
-  RefreshCw,
   LogOut,
   Plus,
   Play,
@@ -33,13 +32,16 @@ import {
   performFullLogout,
   GoogleUserProfile,
 } from "@/lib/driveSync";
+import LoadingOverlay from "@/components/LoadingOverlay";
 
 export default function Home() {
   const router = useRouter();
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [mounted, setMounted] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [userProfile, setUserProfile] = useState<GoogleUserProfile | null>(null);
-  const [isSyncing, setIsSyncing] = useState(false);
+  const [isSigningIn, setIsSigningIn] = useState(false);
   const [showStartModal, setShowStartModal] = useState(false);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const workouts = useLiveQuery(() => db.workouts.toArray(), []) || [];
   const routines = useLiveQuery(() => db.routines.toArray(), []) || [];
@@ -58,35 +60,67 @@ export default function Home() {
   const { currentStreak } = calculateStreaks(workouts);
 
   useEffect(() => {
+    setMounted(true);
+
     const token = getStoredAccessToken();
     const guestMode = localStorage.getItem("repwise_guest_mode") === "true";
 
     if (token) {
       setIsAuthenticated(true);
+      window.dispatchEvent(new Event("repwise_auth_changed"));
       const cached = getStoredUserProfile();
       if (cached) {
         setUserProfile(cached);
       } else {
-        fetchAndStoreGoogleProfile(token).then((p) => setUserProfile(p));
+        fetchAndStoreGoogleProfile(token).then((p) => {
+          if (p) setUserProfile(p);
+        });
       }
     } else if (guestMode) {
       setIsAuthenticated(true);
+      window.dispatchEvent(new Event("repwise_auth_changed"));
     } else {
       setIsAuthenticated(false);
+      window.dispatchEvent(new Event("repwise_auth_changed"));
     }
 
     initGoogleAuth(async (newToken: string) => {
-      setIsSyncing(true);
-      const profile = await fetchAndStoreGoogleProfile(newToken);
-      if (profile) setUserProfile(profile);
-      await pullLatestFromDrive();
-      setIsSyncing(false);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+
       setIsAuthenticated(true);
-      window.location.reload();
+      setIsSigningIn(false);
+      window.dispatchEvent(new Event("repwise_auth_changed"));
+
+      try {
+        const profile = await fetchAndStoreGoogleProfile(newToken);
+        if (profile) setUserProfile(profile);
+        pullLatestFromDrive().catch((e) => console.log("Silent drive pull:", e));
+      } catch (err) {
+        console.warn("Background sync warning:", err);
+      }
     });
+
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
   }, []);
 
-  // Discard any previous incomplete/abandoned session
+  const handleStartSignIn = () => {
+    setIsSigningIn(true);
+
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    timeoutRef.current = setTimeout(() => {
+      setIsSigningIn(false);
+      const token = getStoredAccessToken();
+      if (token) {
+        setIsAuthenticated(true);
+        window.dispatchEvent(new Event("repwise_auth_changed"));
+      }
+    }, 6000);
+
+    requestDriveAuth();
+  };
+
   const clearIncompleteWorkouts = async () => {
     const unfinished = await db.workouts.filter((w) => !w.isCompleted).toArray();
     for (const w of unfinished) {
@@ -96,7 +130,6 @@ export default function Home() {
     }
   };
 
-  // Option 1: Launch Freestyle / Go with the flow
   const handleLaunchFreestyleWorkout = async () => {
     await clearIncompleteWorkouts();
 
@@ -119,7 +152,6 @@ export default function Home() {
     router.push("/workouts/active");
   };
 
-  // Option 2: Launch from existing routine
   const handleLaunchRoutine = async (routine: Routine) => {
     await clearIncompleteWorkouts();
 
@@ -189,25 +221,44 @@ export default function Home() {
     router.push("/workouts/active");
   };
 
-  if (isAuthenticated === null) {
+  // 1. Initial Hydration Guard
+  if (!mounted) {
     return (
-      <div className="min-h-[70vh] flex items-center justify-center">
-        <RefreshCw className="w-6 h-6 animate-spin text-zinc-500" />
-      </div>
+      <LoadingOverlay
+        isLoading={true}
+        message="Loading Workout"
+        subMessage="Syncing local database..."
+      />
     );
   }
 
+  // 2. Active Google Drive connection screen
+  if (isSigningIn) {
+    return (
+      <LoadingOverlay
+        isLoading={true}
+        message="Connecting to Google Drive"
+        subMessage="Authenticating app session..."
+        onCancel={() => {
+          if (timeoutRef.current) clearTimeout(timeoutRef.current);
+          setIsSigningIn(false);
+        }}
+      />
+    );
+  }
+
+  // 3. Unauthenticated Landing Screen (No Navbar)[cite: 7]
   if (!isAuthenticated) {
     return (
       <div className="min-h-[85vh] flex flex-col justify-between py-6">
         <div className="space-y-8 pt-8">
           <div className="flex flex-col items-center text-center space-y-3">
-            <div className="relative w-16 h-16 rounded-2xl overflow-hidden border border-zinc-800 bg-zinc-950 p-2 shadow-2xl flex items-center justify-center">
+            <div className="w-16 h-16 rounded-2xl border border-zinc-800 bg-zinc-950 flex items-center justify-center p-2.5 shadow-2xl">
               <Image
                 src="/logo.png"
                 alt="Repwise Logo"
-                width={52}
-                height={52}
+                width={48}
+                height={48}
                 className="object-contain"
                 priority
               />
@@ -240,8 +291,8 @@ export default function Home() {
 
         <div className="space-y-3 pt-6">
           <button
-            onClick={requestDriveAuth}
-            className="w-full py-3.5 bg-white text-black hover:bg-zinc-200 rounded-xl text-sm font-bold flex items-center justify-center gap-2 shadow-xl transition-all active:scale-[0.98]"
+            onClick={handleStartSignIn}
+            className="w-full py-3.5 bg-white text-black hover:bg-zinc-200 rounded-xl text-sm font-bold flex items-center justify-center gap-2 shadow-xl active:scale-[0.98] transition-transform"
           >
             <span>Sign In with Google</span>
           </button>
@@ -249,8 +300,9 @@ export default function Home() {
             onClick={() => {
               localStorage.setItem("repwise_guest_mode", "true");
               setIsAuthenticated(true);
+              window.dispatchEvent(new Event("repwise_auth_changed"));
             }}
-            className="w-full py-2.5 bg-transparent border border-zinc-800 text-zinc-400 hover:text-zinc-200 rounded-xl text-xs font-semibold transition-all"
+            className="w-full py-2.5 bg-transparent border border-zinc-800 text-zinc-400 hover:text-zinc-200 rounded-xl text-xs font-semibold active:scale-[0.98] transition-transform"
           >
             Continue as Guest (Offline Only)
           </button>
@@ -259,7 +311,7 @@ export default function Home() {
     );
   }
 
-  // PR Calculations
+  // 4. Authenticated Dashboard Screen[cite: 7]
   const prs = exercises
     .map((ex) => {
       const exerciseSets = completedSets.filter((s) => s.exerciseId === ex.id);
@@ -293,7 +345,7 @@ export default function Home() {
           </div>
           <div>
             <h1 className="text-base font-bold text-white leading-none">
-              {userProfile ? `Hey, ${userProfile.given_name || userProfile.name}` : "Dashboard"}
+              {userProfile ? `Hey, ${userProfile.given_name || userProfile.name}` : "Repwise"}
             </h1>
             <span className="text-[11px] text-zinc-400">Track. Overload. Repeat.</span>
           </div>
@@ -306,8 +358,10 @@ export default function Home() {
           </div>
           <button
             onClick={() => {
-              if (confirm("Log out and clear session?")) {
+              if (confirm("Log out and return to landing screen?")) {
                 performFullLogout(false);
+                setIsAuthenticated(false);
+                window.dispatchEvent(new Event("repwise_auth_changed"));
               }
             }}
             className="p-1.5 bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-rose-400 rounded-full transition-colors"

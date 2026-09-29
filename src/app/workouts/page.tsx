@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "@/db/database";
-import { Routine, Exercise, MuscleGroup } from "@/types";
+import { Routine, Exercise, MuscleGroup, WorkoutSet } from "@/types";
 import {
   Play,
   Plus,
@@ -16,10 +16,16 @@ import {
   Search,
   Pencil,
   Library,
+  Sparkles,
+  ChevronUp,
+  ChevronDown,
+  AlertTriangle,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import clsx from "clsx";
 import CreateExerciseModal from "@/components/CreateExerciseModal";
+import ImportAIRoutineModal from "@/components/ImportAIRoutineModal";
+import ExerciseSelectorModal from "@/components/ExerciseSelectorModal";
 
 interface PlannedItem {
   exerciseId: string;
@@ -39,7 +45,6 @@ const MUSCLE_GROUPS: (MuscleGroup | "All")[] = [
 
 export default function WorkoutsTab() {
   const router = useRouter();
-  // Tab switcher now includes 'exercises'
   const [activeTab, setActiveTab] = useState<"routines" | "exercises" | "history">("routines");
 
   // Routine Modal State
@@ -48,14 +53,20 @@ export default function WorkoutsTab() {
   const [routineTitle, setRoutineTitle] = useState("");
   const [plannedItems, setPlannedItems] = useState<PlannedItem[]>([]);
 
-  // Exercise Picker inside Routine Modal
+  // Exercise Picker Modal State
   const [showExercisePicker, setShowExercisePicker] = useState(false);
-  const [searchPicker, setSearchPicker] = useState("");
 
   // Standalone Exercise Library Tab State
   const [librarySearch, setLibrarySearch] = useState("");
   const [libraryMuscle, setLibraryMuscle] = useState<MuscleGroup | "All">("All");
   const [showCreateExerciseModal, setShowCreateExerciseModal] = useState(false);
+
+  // AI Import Routine Modal State
+  const [showAIModal, setShowAIModal] = useState(false);
+
+  // Active Workout Conflict State
+  const [pendingRoutineToStart, setPendingRoutineToStart] = useState<Routine | null>(null);
+  const [showActiveConflictModal, setShowActiveConflictModal] = useState(false);
 
   const routines = useLiveQuery(() => db.routines.toArray(), []) || [];
   const history =
@@ -67,7 +78,6 @@ export default function WorkoutsTab() {
   const exercises = useLiveQuery<Exercise[]>(() => db.exercises.toArray(), []) || [];
   const exerciseMap = new Map(exercises.map((e) => [e.id, e]));
 
-  // Handlers for Routines
   const handleOpenCreateRoutine = () => {
     setEditingRoutineId(null);
     setRoutineTitle("");
@@ -91,6 +101,16 @@ export default function WorkoutsTab() {
       }))
     );
     setIsRoutineModalOpen(true);
+  };
+
+  const handleMoveExercise = (index: number, direction: "up" | "down") => {
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= plannedItems.length) return;
+
+    const updated = [...plannedItems];
+    const [moved] = updated.splice(index, 1);
+    updated.splice(targetIndex, 0, moved);
+    setPlannedItems(updated);
   };
 
   const handleSaveRoutine = async () => {
@@ -149,7 +169,27 @@ export default function WorkoutsTab() {
     setPlannedItems([]);
   };
 
-  const handleStartRoutine = async (routine: Routine) => {
+  // Launch Routine with Active Workout Check
+  const initiateRoutineStart = async (routine: Routine) => {
+    const unfinished = await db.workouts.filter((w) => !w.isCompleted).toArray();
+    if (unfinished.length > 0) {
+      setPendingRoutineToStart(routine);
+      setShowActiveConflictModal(true);
+      return;
+    }
+
+    await executeStartRoutine(routine);
+  };
+
+  const executeStartRoutine = async (routine: Routine) => {
+    // Delete any incomplete leftover
+    const unfinished = await db.workouts.filter((w) => !w.isCompleted).toArray();
+    for (const w of unfinished) {
+      await db.workouts.delete(w.id);
+      await db.workoutExercises.where("workoutId").equals(w.id).delete();
+      await db.sets.where("workoutId").equals(w.id).delete();
+    }
+
     const routineItems = await db.routineItems
       .where("routineId")
       .equals(routine.id)
@@ -165,6 +205,11 @@ export default function WorkoutsTab() {
       isCompleted: false,
     });
 
+    const completedWorkouts = await db.workouts
+      .filter((w) => Boolean(w.isCompleted) && Boolean(w.endTime))
+      .toArray();
+    completedWorkouts.sort((a, b) => (b.endTime || 0) - (a.endTime || 0));
+
     for (const item of routineItems) {
       const weId = `we_${Date.now()}_${item.exerciseId}`;
       await db.workoutExercises.add({
@@ -174,8 +219,25 @@ export default function WorkoutsTab() {
         orderIndex: item.orderIndex,
       });
 
+      let previousSets: WorkoutSet[] = [];
+      for (const cw of completedWorkouts) {
+        const found = await db.sets
+          .where("workoutId")
+          .equals(cw.id)
+          .filter((s) => s.exerciseId === item.exerciseId && Boolean(s.isCompleted))
+          .sortBy("setIndex");
+        if (found.length > 0) {
+          previousSets = found;
+          break;
+        }
+      }
+
       const setsCount = item.targetSets || 3;
       for (let s = 1; s <= setsCount; s++) {
+        const ghostSet = previousSets[s - 1] || previousSets[0];
+        const initialWeight = ghostSet ? ghostSet.weightKg : item.targetWeightKg || 0;
+        const initialReps = ghostSet ? ghostSet.reps : item.targetReps || 10;
+
         await db.sets.add({
           id: `s_${Date.now()}_${item.exerciseId}_${s}`,
           workoutExerciseId: weId,
@@ -183,8 +245,8 @@ export default function WorkoutsTab() {
           exerciseId: item.exerciseId,
           setIndex: s,
           setType: "normal",
-          weightKg: item.targetWeightKg || 0,
-          reps: item.targetReps || 10,
+          weightKg: initialWeight,
+          reps: initialReps,
           isCompleted: false,
         });
       }
@@ -193,7 +255,6 @@ export default function WorkoutsTab() {
     router.push("/workouts/active");
   };
 
-  // Filtered Library Exercises
   const filteredLibrary = exercises.filter((e) => {
     const matchSearch =
       e.name.toLowerCase().includes(librarySearch.toLowerCase()) ||
@@ -248,12 +309,20 @@ export default function WorkoutsTab() {
             <span className="text-xs uppercase text-zinc-400 font-semibold tracking-wider">
               Saved Templates ({routines.length})
             </span>
-            <button
-              onClick={handleOpenCreateRoutine}
-              className="text-xs bg-white text-black hover:bg-zinc-200 font-bold px-3 py-1.5 rounded-lg flex items-center gap-1 transition-all"
-            >
-              <Plus className="w-3.5 h-3.5 stroke-[3]" /> Plan Routine
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowAIModal(true)}
+                className="text-xs bg-zinc-900 border border-zinc-800 hover:border-zinc-600 text-white font-semibold px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-white" /> AI Import
+              </button>
+              <button
+                onClick={handleOpenCreateRoutine}
+                className="text-xs bg-white text-black hover:bg-zinc-200 font-bold px-3 py-1.5 rounded-lg flex items-center gap-1 transition-all"
+              >
+                <Plus className="w-3.5 h-3.5 stroke-[3]" /> Plan Routine
+              </button>
+            </div>
           </div>
 
           {routines.length === 0 ? (
@@ -296,7 +365,7 @@ export default function WorkoutsTab() {
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      handleStartRoutine(routine);
+                      initiateRoutineStart(routine);
                     }}
                     className="bg-white text-black hover:bg-zinc-200 px-3.5 py-1.5 rounded-lg font-bold text-xs flex items-center gap-1.5 transition-all shadow-sm active:scale-95"
                   >
@@ -324,7 +393,6 @@ export default function WorkoutsTab() {
             </button>
           </div>
 
-          {/* Search Input */}
           <div className="relative">
             <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-3" />
             <input
@@ -336,7 +404,6 @@ export default function WorkoutsTab() {
             />
           </div>
 
-          {/* Muscle Group Horizontal Filter Pills */}
           <div className="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
             {MUSCLE_GROUPS.map((m) => (
               <button
@@ -354,7 +421,6 @@ export default function WorkoutsTab() {
             ))}
           </div>
 
-          {/* Exercise List */}
           <div className="space-y-2">
             {filteredLibrary.map((ex) => (
               <div
@@ -428,11 +494,12 @@ export default function WorkoutsTab() {
         </div>
       )}
 
-      {/* Routine Planner / Editor Modal */}
+{/* Routine Planner / Editor Modal */}
       {isRoutineModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end sm:justify-center sm:items-center p-0 sm:p-4">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-t-2xl sm:rounded-2xl p-5 w-full max-w-md max-h-[90vh] flex flex-col">
-            <div className="flex justify-between items-center pb-3 border-b border-zinc-800">
+        <div className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 pb-20 select-none">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 w-full max-w-md h-[82vh] max-h-[640px] flex flex-col shadow-2xl">
+            {/* Header */}
+            <div className="flex justify-between items-center pb-3 border-b border-zinc-800 shrink-0">
               <h2 className="text-base font-bold text-white">
                 {editingRoutineId ? "Edit Routine Template" : "New Routine Template"}
               </h2>
@@ -444,6 +511,7 @@ export default function WorkoutsTab() {
               </button>
             </div>
 
+            {/* Scrollable Form Body */}
             <div className="overflow-y-auto space-y-4 py-4 flex-1 pr-1">
               <div>
                 <label className="block text-xs uppercase font-semibold text-zinc-400 mb-1">
@@ -451,7 +519,7 @@ export default function WorkoutsTab() {
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. Push Day"
+                  placeholder="e.g. Pull Day"
                   value={routineTitle}
                   onChange={(e) => setRoutineTitle(e.target.value)}
                   className="w-full bg-zinc-800 border border-zinc-700 focus:border-white rounded-xl px-3.5 py-2.5 text-sm text-white outline-none"
@@ -468,25 +536,46 @@ export default function WorkoutsTab() {
                   return (
                     <div
                       key={`${item.exerciseId}_${idx}`}
-                      className="bg-zinc-950 border border-zinc-800 rounded-xl p-3 space-y-2"
+                      className="bg-zinc-950 border border-zinc-800 rounded-xl p-3.5 space-y-2.5"
                     >
                       <div className="flex justify-between items-center">
-                        <span className="text-xs font-semibold text-white">
-                          {ex?.name || "Exercise"}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-0.5 mr-1">
+                            <button
+                              type="button"
+                              disabled={idx === 0}
+                              onClick={() => handleMoveExercise(idx, "up")}
+                              className="p-1 text-zinc-500 hover:text-white disabled:opacity-20 disabled:hover:text-zinc-500 rounded hover:bg-zinc-800 transition-colors"
+                            >
+                              <ChevronUp className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={idx === plannedItems.length - 1}
+                              onClick={() => handleMoveExercise(idx, "down")}
+                              className="p-1 text-zinc-500 hover:text-white disabled:opacity-20 disabled:hover:text-zinc-500 rounded hover:bg-zinc-800 transition-colors"
+                            >
+                              <ChevronDown className="w-4 h-4" />
+                            </button>
+                          </div>
+                          <span className="text-sm font-semibold text-white">
+                            {ex?.name || "Exercise"}
+                          </span>
+                        </div>
+
                         <button
                           onClick={() => {
                             setPlannedItems(plannedItems.filter((_, i) => i !== idx));
                           }}
-                          className="text-zinc-600 hover:text-rose-400 p-1"
+                          className="text-zinc-600 hover:text-rose-400 p-1 transition-colors"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="grid grid-cols-2 gap-2.5 text-xs">
                         <div>
-                          <label className="text-[10px] text-zinc-500 uppercase block mb-1">
+                          <label className="text-[10px] text-zinc-400 uppercase font-semibold block mb-1">
                             Sets
                           </label>
                           <input
@@ -500,12 +589,12 @@ export default function WorkoutsTab() {
                               updated[idx].targetSets = val;
                               setPlannedItems(updated);
                             }}
-                            className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-white font-mono outline-none"
+                            className="w-full bg-zinc-900 border border-zinc-800 focus:border-zinc-500 rounded-lg px-3 py-2 text-white font-mono outline-none"
                           />
                         </div>
 
                         <div>
-                          <label className="text-[10px] text-zinc-500 uppercase block mb-1">
+                          <label className="text-[10px] text-zinc-400 uppercase font-semibold block mb-1">
                             Target Reps
                           </label>
                           <input
@@ -519,7 +608,7 @@ export default function WorkoutsTab() {
                               updated[idx].targetReps = val;
                               setPlannedItems(updated);
                             }}
-                            className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-white font-mono outline-none"
+                            className="w-full bg-zinc-900 border border-zinc-800 focus:border-zinc-500 rounded-lg px-3 py-2 text-white font-mono outline-none"
                           />
                         </div>
                       </div>
@@ -530,14 +619,15 @@ export default function WorkoutsTab() {
                 <button
                   type="button"
                   onClick={() => setShowExercisePicker(true)}
-                  className="w-full py-2.5 border border-dashed border-zinc-700 hover:border-zinc-500 rounded-xl text-xs font-semibold text-zinc-400 hover:text-white flex items-center justify-center gap-1 transition-colors"
+                  className="w-full py-3 border border-dashed border-zinc-700 hover:border-zinc-500 rounded-xl text-xs font-semibold text-zinc-300 hover:text-white flex items-center justify-center gap-1.5 transition-colors"
                 >
-                  <Plus className="w-3.5 h-3.5" /> Add Exercise to Routine
+                  <Plus className="w-4 h-4" /> Add Exercise to Routine
                 </button>
               </div>
             </div>
 
-            <div className="pt-3 border-t border-zinc-800">
+            {/* Modal Bottom Action Bar (Fixed, never pushed offscreen) */}
+            <div className="pt-3 border-t border-zinc-800 shrink-0">
               <button
                 onClick={handleSaveRoutine}
                 className="w-full py-3 bg-white text-black hover:bg-zinc-200 font-bold rounded-xl text-sm transition-all shadow-md active:scale-95"
@@ -549,58 +639,73 @@ export default function WorkoutsTab() {
         </div>
       )}
 
-      {/* Routine Planner Exercise Picker */}
-      {showExercisePicker && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex flex-col justify-end">
-          <div className="bg-zinc-900 border-t border-zinc-800 rounded-t-2xl p-4 max-h-[85vh] flex flex-col pb-16">
-            <div className="flex justify-between items-center pb-3 border-b border-zinc-800">
-              <h2 className="font-semibold text-sm text-white">Select Exercise</h2>
-              <button
-                onClick={() => setShowExercisePicker(false)}
-                className="text-xs text-zinc-400 hover:text-white"
-              >
-                Close
-              </button>
-            </div>
+      {/* Shared Unified Exercise Selector Modal */}
+      <ExerciseSelectorModal
+        isOpen={showExercisePicker}
+        onClose={() => setShowExercisePicker(false)}
+        exercises={exercises}
+        onSelectSingle={(id) => {
+          setPlannedItems([...plannedItems, { exerciseId: id, targetSets: 3, targetReps: 10 }]);
+        }}
+        onSelectMultiple={(ids) => {
+          const newEntries = ids.map((id) => ({
+            exerciseId: id,
+            targetSets: 3,
+            targetReps: 10,
+          }));
+          setPlannedItems([...plannedItems, ...newEntries]);
+        }}
+      />
 
-            <div className="pt-3 pb-2">
-              <div className="relative">
-                <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-2.5" />
-                <input
-                  type="text"
-                  placeholder="Search exercises..."
-                  value={searchPicker}
-                  onChange={(e) => setSearchPicker(e.target.value)}
-                  className="w-full bg-zinc-800 border border-zinc-700 focus:border-white rounded-xl pl-8 pr-3 py-1.5 text-xs text-white outline-none"
-                />
+      {/* Active Workout Conflict Modal */}
+      {showActiveConflictModal && (
+        <div className="fixed inset-0 z-[70] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 max-w-sm w-full space-y-4 shadow-2xl">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white">Active Session In Progress</h3>
+                <p className="text-xs text-zinc-400">You already have an unfinished workout.</p>
               </div>
             </div>
 
-            <div className="overflow-y-auto py-1 divide-y divide-zinc-800/50 flex-1">
-              {exercises
-                .filter((e) => e.name.toLowerCase().includes(searchPicker.toLowerCase()))
-                .map((e) => (
-                  <div
-                    key={e.id}
-                    onClick={() => {
-                      setPlannedItems([
-                        ...plannedItems,
-                        { exerciseId: e.id, targetSets: 3, targetReps: 10 },
-                      ]);
-                      setShowExercisePicker(false);
-                      setSearchPicker("");
-                    }}
-                    className="py-2.5 px-2 flex justify-between items-center hover:bg-zinc-800 rounded-lg cursor-pointer transition-colors"
-                  >
-                    <div>
-                      <p className="text-sm font-medium text-white">{e.name}</p>
-                      <span className="text-xs text-zinc-500">
-                        {e.targetMuscle} • {e.equipment}
-                      </span>
-                    </div>
-                    <Plus className="w-4 h-4 text-zinc-400" />
-                  </div>
-                ))}
+            <p className="text-xs text-zinc-300">
+              Starting a new routine will discard your current active workout session. Would you like to resume it instead?
+            </p>
+
+            <div className="space-y-2 pt-1">
+              <button
+                onClick={() => {
+                  setShowActiveConflictModal(false);
+                  router.push("/workouts/active");
+                }}
+                className="w-full py-2.5 bg-white text-black hover:bg-zinc-200 font-bold rounded-xl text-xs transition-all shadow-sm"
+              >
+                Resume Current Workout
+              </button>
+              <button
+                onClick={async () => {
+                  setShowActiveConflictModal(false);
+                  if (pendingRoutineToStart) {
+                    await executeStartRoutine(pendingRoutineToStart);
+                    setPendingRoutineToStart(null);
+                  }
+                }}
+                className="w-full py-2.5 bg-rose-500/10 border border-rose-500/20 hover:bg-rose-500/20 text-rose-400 font-bold rounded-xl text-xs transition-all"
+              >
+                Discard & Start New Routine
+              </button>
+              <button
+                onClick={() => {
+                  setShowActiveConflictModal(false);
+                  setPendingRoutineToStart(null);
+                }}
+                className="w-full py-2 bg-transparent text-zinc-400 hover:text-white text-xs font-semibold"
+              >
+                Cancel
+              </button>
             </div>
           </div>
         </div>
@@ -610,6 +715,14 @@ export default function WorkoutsTab() {
       <CreateExerciseModal
         isOpen={showCreateExerciseModal}
         onClose={() => setShowCreateExerciseModal(false)}
+      />
+
+      {/* Modal for Guided AI Routine Import */}
+      <ImportAIRoutineModal
+        isOpen={showAIModal}
+        onClose={() => setShowAIModal(false)}
+        onImportComplete={() => {}}
+        existingExercises={exercises}
       />
     </div>
   );

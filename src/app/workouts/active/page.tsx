@@ -3,7 +3,7 @@
 
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "@/db/database";
-import { WorkoutExercise, WorkoutSet, Exercise, Workout, RoutineItem, MuscleGroup } from "@/types";
+import { WorkoutExercise, WorkoutSet, Exercise, Workout, RoutineItem } from "@/types";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -13,26 +13,14 @@ import {
   ArrowLeft,
   Calendar,
   BookmarkPlus,
-  Search,
-  Check,
   RefreshCw,
 } from "lucide-react";
 import SetRow from "@/components/SetRow";
 import RestTimerModal from "@/components/RestTimerModal";
+import ExerciseSelectorModal from "@/components/ExerciseSelectorModal";
 import { useRestTimer } from "@/hooks/useRestTimer";
 import { calculateWorkoutVolume } from "@/lib/formulas";
 import { pushLatestToDrive, triggerAutoSync } from "@/lib/driveSync";
-import clsx from "clsx";
-
-const MUSCLE_GROUPS: (MuscleGroup | "All")[] = [
-  "All",
-  "Chest",
-  "Back",
-  "Legs",
-  "Shoulders",
-  "Arms",
-  "Core",
-];
 
 export default function ActiveWorkoutView() {
   const router = useRouter();
@@ -103,10 +91,8 @@ export default function ActiveWorkoutView() {
   const isRoutineModified = (() => {
     if (!activeWorkout?.routineId || originalRoutineItems.length === 0) return false;
 
-    // Check if exercise count differs
     if (workoutExercises.length !== originalRoutineItems.length) return true;
 
-    // Check if any exercise or set count differs
     for (let i = 0; i < workoutExercises.length; i++) {
       const we = workoutExercises[i];
       const orig = originalRoutineItems[i];
@@ -120,9 +106,6 @@ export default function ActiveWorkoutView() {
   })();
 
   const [showExerciseSelector, setShowExerciseSelector] = useState(false);
-  const [selectedMuscle, setSelectedMuscle] = useState<MuscleGroup | "All">("All");
-  const [searchExercise, setSearchExercise] = useState("");
-  const [selectedExerciseIds, setSelectedExerciseIds] = useState<string[]>([]);
 
   const {
     secondsRemaining,
@@ -203,7 +186,6 @@ export default function ActiveWorkoutView() {
   };
 
   const handleFinishWorkout = async () => {
-    // If routine was modified, prompt user whether to save changes to template
     if (activeWorkout.routineId && isRoutineModified) {
       const shouldUpdate = confirm(
         "You modified exercises or sets in this planned routine. Would you like to update the saved routine template as well?"
@@ -260,16 +242,16 @@ export default function ActiveWorkoutView() {
     triggerAutoSync();
   };
 
-  const handleAddSingleExercise = async (exercise: Exercise) => {
-    const prevSets = previousPerformanceMap?.get(exercise.id) || [];
+  const handleAddSingleExercise = async (exerciseId: string) => {
+    const prevSets = previousPerformanceMap?.get(exerciseId) || [];
     const prefillWeight = prevSets[0]?.weightKg || 0;
     const prefillReps = prevSets[0]?.reps || 10;
 
-    const weId = `we_${Date.now()}_${exercise.id}`;
+    const weId = `we_${Date.now()}_${exerciseId}`;
     await db.workoutExercises.add({
       id: weId,
       workoutId: activeWorkout.id,
-      exerciseId: exercise.id,
+      exerciseId: exerciseId,
       orderIndex: workoutExercises.length + 1,
     });
 
@@ -277,7 +259,7 @@ export default function ActiveWorkoutView() {
       id: `s_${Date.now()}_1`,
       workoutExerciseId: weId,
       workoutId: activeWorkout.id,
-      exerciseId: exercise.id,
+      exerciseId: exerciseId,
       setIndex: 1,
       setType: "normal",
       weightKg: prefillWeight,
@@ -289,8 +271,8 @@ export default function ActiveWorkoutView() {
     triggerAutoSync();
   };
 
-  const handleAddMultipleExercises = async () => {
-    for (const id of selectedExerciseIds) {
+  const handleAddMultipleExercises = async (exerciseIds: string[]) => {
+    for (const id of exerciseIds) {
       const prevSets = previousPerformanceMap?.get(id) || [];
       const prefillWeight = prevSets[0]?.weightKg || 0;
       const prefillReps = prevSets[0]?.reps || 10;
@@ -316,7 +298,6 @@ export default function ActiveWorkoutView() {
       });
     }
 
-    setSelectedExerciseIds([]);
     setShowExerciseSelector(false);
     triggerAutoSync();
   };
@@ -339,15 +320,6 @@ export default function ActiveWorkoutView() {
 
     triggerAutoSync();
   };
-
-  const filteredPickerExercises = exercises.filter((e) => {
-    const matchesSearch =
-      e.name.toLowerCase().includes(searchExercise.toLowerCase()) ||
-      e.equipment.toLowerCase().includes(searchExercise.toLowerCase());
-    const matchesMuscle =
-      selectedMuscle === "All" || e.targetMuscle === selectedMuscle;
-    return matchesSearch && matchesMuscle;
-  });
 
   return (
     <div className="space-y-4 pb-28">
@@ -398,7 +370,6 @@ export default function ActiveWorkoutView() {
           />
         </div>
 
-        {/* Show 'Save as Routine' for freestyle, or 'Update Routine' ONLY if modified */}
         {!activeWorkout.routineId ? (
           <button
             onClick={handleSaveAsRoutine}
@@ -508,127 +479,20 @@ export default function ActiveWorkoutView() {
 
       {/* Add Exercise Trigger Button */}
       <button
-        onClick={() => {
-          setSelectedExerciseIds([]);
-          setShowExerciseSelector(true);
-        }}
+        onClick={() => setShowExerciseSelector(true)}
         className="w-full py-3 border border-dashed border-zinc-800 hover:border-zinc-500 rounded-xl text-xs font-semibold text-zinc-400 hover:text-white transition-colors flex items-center justify-center gap-1.5"
       >
         <Plus className="w-4 h-4" /> Add Exercise
       </button>
 
-      {/* Exercise Picker Modal */}
-      {showExerciseSelector && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex flex-col justify-end">
-          <div className="bg-zinc-900 border-t border-zinc-800 rounded-t-2xl p-4 max-h-[85vh] flex flex-col pb-16">
-            <div className="flex justify-between items-center pb-3 border-b border-zinc-800">
-              <h2 className="font-semibold text-sm text-white">Add Exercises</h2>
-              <button
-                onClick={() => setShowExerciseSelector(false)}
-                className="text-xs text-zinc-400 hover:text-white"
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="pt-3 pb-2">
-              <div className="relative">
-                <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-2.5" />
-                <input
-                  type="text"
-                  placeholder="Search exercise..."
-                  value={searchExercise}
-                  onChange={(e) => setSearchExercise(e.target.value)}
-                  className="w-full bg-zinc-800 border border-zinc-700 focus:border-white rounded-xl pl-8 pr-3 py-1.5 text-xs text-white outline-none"
-                />
-              </div>
-            </div>
-
-            <div className="flex gap-1.5 overflow-x-auto pb-2 no-scrollbar">
-              {MUSCLE_GROUPS.map((m) => (
-                <button
-                  key={m}
-                  onClick={() => setSelectedMuscle(m)}
-                  className={clsx(
-                    "px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors",
-                    selectedMuscle === m
-                      ? "bg-white text-black font-bold"
-                      : "bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-zinc-200"
-                  )}
-                >
-                  {m}
-                </button>
-              ))}
-            </div>
-
-            <div className="overflow-y-auto py-1 divide-y divide-zinc-800/50 flex-1">
-              {filteredPickerExercises.map((e) => {
-                const isSelected = selectedExerciseIds.includes(e.id);
-                return (
-                  <div
-                    key={e.id}
-                    className="py-2 px-2 flex justify-between items-center hover:bg-zinc-800/60 rounded-lg transition-colors group"
-                  >
-                    <div
-                      onClick={() => handleAddSingleExercise(e)}
-                      className="flex-1 cursor-pointer pr-3"
-                    >
-                      <p className="text-sm font-medium text-white group-hover:underline">
-                        {e.name}
-                      </p>
-                      <span className="text-xs text-zinc-500">
-                        {e.targetMuscle} • {e.equipment}
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => handleAddSingleExercise(e)}
-                        className="p-1.5 bg-zinc-800 hover:bg-zinc-700 rounded-md text-zinc-300 hover:text-white"
-                        title="Add individually"
-                      >
-                        <Plus className="w-4 h-4" />
-                      </button>
-
-                      <div
-                        onClick={() => {
-                          if (isSelected) {
-                            setSelectedExerciseIds(
-                              selectedExerciseIds.filter((id) => id !== e.id)
-                            );
-                          } else {
-                            setSelectedExerciseIds([...selectedExerciseIds, e.id]);
-                          }
-                        }}
-                        className={clsx(
-                          "w-6 h-6 rounded border flex items-center justify-center cursor-pointer transition-colors",
-                          isSelected
-                            ? "bg-white border-white text-black"
-                            : "border-zinc-700 bg-zinc-950 hover:border-zinc-500"
-                        )}
-                        title="Select for bulk add"
-                      >
-                        {isSelected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {selectedExerciseIds.length > 0 && (
-              <div className="pt-3 border-t border-zinc-800">
-                <button
-                  onClick={handleAddMultipleExercises}
-                  className="w-full py-3 bg-white text-black hover:bg-zinc-200 font-bold rounded-xl text-sm transition-all"
-                >
-                  Add Selected ({selectedExerciseIds.length})
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      {/* Shared Unified Exercise Selector Modal */}
+      <ExerciseSelectorModal
+        isOpen={showExerciseSelector}
+        onClose={() => setShowExerciseSelector(false)}
+        exercises={exercises}
+        onSelectSingle={handleAddSingleExercise}
+        onSelectMultiple={handleAddMultipleExercises}
+      />
 
       {/* Floating Rest Timer */}
       <RestTimerModal

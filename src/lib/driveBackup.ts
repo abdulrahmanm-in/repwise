@@ -1,5 +1,4 @@
 // src/lib/driveBackup.ts
-import { db } from "@/db/database";
 import { exportDatabaseToJSON, importDatabaseFromJSON } from "./jsonBackup";
 
 declare global {
@@ -7,166 +6,216 @@ declare global {
     google?: any;
   }
 }
-
 const CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
-const SCOPES = "https://www.googleapis.com/auth/drive.appdata";
+const SCOPES =
+  "https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/userinfo.profile";
 
-let cachedToken: string | null = null;
 let tokenClient: any = null;
+let activeSuccessCallback: ((token: string) => void) | null = null;
 
-// Return cached memory token or fallback to local storage
+/**
+ * Access token persistence helpers
+ */
 export function getStoredAccessToken(): string | null {
-  if (cachedToken) return cachedToken;
-  if (typeof window !== "undefined") {
-    return localStorage.getItem("gdrive_access_token");
-  }
-  return null;
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem("repwise_google_token");
 }
 
-// Store token locally and in memory
 export function setStoredAccessToken(token: string | null) {
-  cachedToken = token;
-  if (typeof window !== "undefined") {
-    if (token) {
-      localStorage.setItem("gdrive_access_token", token);
-    } else {
-      localStorage.removeItem("gdrive_access_token");
-    }
+  if (typeof window === "undefined") return;
+  if (token) {
+    localStorage.setItem("repwise_google_token", token);
+  } else {
+    localStorage.removeItem("repwise_google_token");
   }
 }
 
-// Initializer expected by page.tsx and driveSync.ts
-export function initGoogleAuth(onSuccess?: (token: string) => void) {
-  if (typeof window === "undefined" || !window.google || !CLIENT_ID) return;
+/**
+ * Initialize Google Identity Services OAuth Token Client
+ */
+export function initGoogleAuth(onSuccess: (token: string) => void) {
+  if (typeof window === "undefined") return;
+  activeSuccessCallback = onSuccess;
+
+  const googleObj = window.google;
+  if (!googleObj || !CLIENT_ID) return;
 
   try {
-    tokenClient = window.google.accounts.oauth2.initTokenClient({
+    tokenClient = googleObj.accounts.oauth2.initTokenClient({
       client_id: CLIENT_ID,
       scope: SCOPES,
-      callback: async (response: any) => {
-        if (response.error) {
-          console.error("Google Auth error:", response.error);
-          return;
+      callback: (tokenResponse: any) => {
+        if (tokenResponse && tokenResponse.access_token) {
+          setStoredAccessToken(tokenResponse.access_token);
+          if (activeSuccessCallback) {
+            activeSuccessCallback(tokenResponse.access_token);
+          }
         }
-        setStoredAccessToken(response.access_token);
-        await db.settings.update("current", {
-          googleDriveLinked: true,
-          lastBackupAt: Date.now(),
-        });
-        if (onSuccess) {
-          onSuccess(response.access_token);
-        }
+      },
+      error_callback: (error: any) => {
+        console.warn("Google OAuth popup closed or error:", error);
       },
     });
   } catch (err) {
-    console.warn("Failed to initialize Google Auth:", err);
+    console.warn("Failed to initialize Google token client:", err);
   }
 }
 
-// Sign-in trigger
-export async function requestDriveAuth(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    if (typeof window === "undefined" || !window.google) {
-      return reject(new Error("Google Identity SDK not loaded yet."));
-    }
-
-    try {
-      tokenClient = window.google.accounts.oauth2.initTokenClient({
-        client_id: CLIENT_ID,
-        scope: SCOPES,
-        callback: async (response: any) => {
-          if (response.error) {
-            return reject(new Error(response.error));
-          }
-          setStoredAccessToken(response.access_token);
-          await db.settings.update("current", {
-            googleDriveLinked: true,
-            lastBackupAt: Date.now(),
-          });
-          resolve(response.access_token);
-        },
-      });
-
-      tokenClient.requestAccessToken({ prompt: "consent" });
-    } catch (err: any) {
-      reject(err);
-    }
-  });
-}
-
-// Disconnect helper expected by driveSync.ts & dashboard
-export async function disconnectGoogleDrive(): Promise<void> {
-  const token = getStoredAccessToken();
-  if (token && typeof window !== "undefined" && window.google) {
-    try {
-      window.google.accounts.oauth2.revoke(token, () => {});
-    } catch (e) {
-      console.warn("Failed to revoke token:", e);
-    }
+/**
+ * Trigger the Google OAuth consent popup
+ */
+export function requestDriveAuth() {
+  if (!CLIENT_ID) {
+    alert(
+      "Missing NEXT_PUBLIC_GOOGLE_CLIENT_ID in .env.local. Continuing in local guest mode."
+    );
+    return;
   }
 
-  setStoredAccessToken(null);
-  await db.settings.update("current", {
-    googleDriveLinked: false,
-  });
+  if (!tokenClient && typeof window !== "undefined" && window.google) {
+    initGoogleAuth(activeSuccessCallback || (() => {}));
+  }
+
+  if (tokenClient) {
+    tokenClient.requestAccessToken({ prompt: "" });
+  } else {
+    alert(
+      "Google Identity service is still loading. Please tap again in a moment."
+    );
+  }
 }
 
-// Backup database to hidden appDataFolder
+/**
+ * Upload an encrypted or clean JSON database snapshot directly to the isolated appDataFolder
+ */
 export async function uploadBackupToDrive(): Promise<boolean> {
-  let token = getStoredAccessToken();
+  const token = getStoredAccessToken();
   if (!token) {
-    token = await requestDriveAuth();
+    throw new Error("No active Google account found. Sign in first.");
   }
-  if (!token) throw new Error("Google authorization required.");
 
   const backupData = await exportDatabaseToJSON();
   const fileContent = new Blob([backupData], { type: "application/json" });
-  const metadata = {
-    name: "repwise_backup.json",
-    parents: ["appDataFolder"],
-  };
 
-  const form = new FormData();
-  form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
-  form.append("file", fileContent);
-
-  const res = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
-    body: form,
-  });
-
-  if (res.ok) {
-    await db.settings.update("current", { lastBackupAt: Date.now() });
-  }
-  return res.ok;
-}
-
-// Restore database from appDataFolder
-export async function restoreLatestFromDrive(): Promise<boolean> {
-  let token = getStoredAccessToken();
-  if (!token) {
-    token = await requestDriveAuth();
-  }
-  if (!token) throw new Error("Google authorization required.");
-
+  // First, verify if an existing backup file is present in appDataFolder
   const searchRes = await fetch(
-    "https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name='repwise_backup.json'&orderBy=modifiedTime desc",
+    "https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name='repwise_backup.json'&fields=files(id,name)",
     {
       headers: { Authorization: `Bearer ${token}` },
     }
   );
 
+  if (!searchRes.ok) {
+    if (searchRes.status === 401) {
+      setStoredAccessToken(null);
+      throw new Error("Session expired. Please reconnect your Google account.");
+    }
+    throw new Error("Failed to check existing cloud backups.");
+  }
+
+  const searchData = await searchRes.json();
+  const existingFile = searchData.files && searchData.files.length > 0 ? searchData.files[0] : null;
+
+  if (existingFile) {
+    // Overwrite the existing backup file
+    const updateRes = await fetch(
+      `https://www.googleapis.com/upload/drive/v3/files/${existingFile.id}?uploadType=media`,
+      {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: fileContent,
+      }
+    );
+    return updateRes.ok;
+  } else {
+    // Create new backup file in appDataFolder
+    const metadata = {
+      name: "repwise_backup.json",
+      parents: ["appDataFolder"],
+    };
+
+    const form = new FormData();
+    form.append(
+      "metadata",
+      new Blob([JSON.stringify(metadata)], { type: "application/json" })
+    );
+    form.append("file", fileContent);
+
+    const uploadRes = await fetch(
+      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+      }
+    );
+    return uploadRes.ok;
+  }
+}
+
+/**
+ * Fetch and restore the newest backup file from the appDataFolder
+ */
+export async function restoreLatestFromDrive(): Promise<boolean> {
+  const token = getStoredAccessToken();
+  if (!token) {
+    throw new Error("No active Google account found. Sign in first.");
+  }
+
+  const searchRes = await fetch(
+    "https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name='repwise_backup.json'&orderBy=modifiedTime desc&fields=files(id,name,modifiedTime)",
+    {
+      headers: { Authorization: `Bearer ${token}` },
+    }
+  );
+
+  if (!searchRes.ok) {
+    if (searchRes.status === 401) {
+      setStoredAccessToken(null);
+      throw new Error("Session expired. Please reconnect your Google account.");
+    }
+    throw new Error("Failed to access cloud backups.");
+  }
+
   const searchData = await searchRes.json();
   if (!searchData.files || searchData.files.length === 0) {
-    throw new Error("No existing backup file found in Google Drive.");
+    throw new Error("No existing backup file found on Google Drive.");
   }
 
   const fileId = searchData.files[0].id;
-  const fileRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const fileRes = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+    }
+  );
+
+  if (!fileRes.ok) {
+    throw new Error("Failed to download cloud backup file.");
+  }
 
   const jsonText = await fileRes.text();
   return importDatabaseFromJSON(jsonText);
+}
+
+/**
+ * Revokes Google session token and purges credentials from local storage
+ */
+export function disconnectGoogleDrive() {
+  const token = getStoredAccessToken();
+
+  if (token && typeof window !== "undefined" && window.google?.accounts?.oauth2) {
+    try {
+      window.google.accounts.oauth2.revoke(token, () => {
+        // Token revoked on Google's servers
+      });
+    } catch (e) {
+      console.warn("Could not revoke token remotely:", e);
+    }
+  }
+
+  setStoredAccessToken(null);
 }
