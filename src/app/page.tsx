@@ -3,6 +3,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ArrowRight,
@@ -15,6 +16,10 @@ import {
   Play,
   X,
   BookOpen,
+  ShieldCheck,
+  FileText,
+  Zap,
+  Lock,
 } from "lucide-react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "@/db/database";
@@ -247,11 +252,12 @@ export default function Home() {
     );
   }
 
-  // 3. Unauthenticated Landing Screen (No Navbar)[cite: 7]
+  // 3. Unauthenticated Public Landing Page (Meets Google Reviewer Standards)
   if (!isAuthenticated) {
     return (
-      <div className="min-h-[85vh] flex flex-col justify-between py-6">
-        <div className="space-y-8 pt-8">
+      <div className="min-h-[88vh] flex flex-col justify-between py-6 space-y-8 select-none">
+        <div className="space-y-6 pt-2">
+          {/* Header Brand & Product Positioning */}
           <div className="flex flex-col items-center text-center space-y-3">
             <div className="w-16 h-16 rounded-2xl border border-zinc-800 bg-zinc-950 flex items-center justify-center p-2.5 shadow-2xl">
               <Image
@@ -264,35 +270,62 @@ export default function Home() {
               />
             </div>
             <div>
-              <h1 className="text-3xl font-extrabold text-white">Repwise</h1>
+              <h1 className="text-3xl font-extrabold text-white tracking-tight">Repwise</h1>
               <p className="text-xs text-zinc-400 mt-1 uppercase tracking-widest font-mono">
-                Local-First • Cloud-Synced
+                Local-First Workout Tracker
               </p>
             </div>
+            <p className="text-xs text-zinc-300 max-w-sm leading-relaxed px-2">
+              Repwise is an offline-first fitness companion built to log sets, monitor progressive
+              overload, and synchronize routines safely to your own personal Google Drive AppData folder[cite: 1, 2].
+            </p>
           </div>
 
+          {/* Feature Showcase Cards (Satisfies Google Brand & Landing Review) */}
           <div className="space-y-2.5">
-            <div className="flex items-center gap-3 bg-zinc-900 border border-zinc-800 p-3.5 rounded-xl">
-              <Dumbbell className="w-5 h-5 text-white shrink-0" />
+            <div className="flex items-start gap-3 bg-zinc-900 border border-zinc-800 p-3.5 rounded-xl">
+              <div className="p-2 bg-zinc-950 border border-zinc-800 rounded-lg text-white shrink-0 mt-0.5">
+                <Zap className="w-4 h-4" />
+              </div>
               <div>
-                <p className="text-xs font-semibold text-white">Instant Set Logging</p>
-                <p className="text-[11px] text-zinc-400">Zero latency. Offline-first gym tracker.</p>
+                <p className="text-xs font-semibold text-white">Zero Latency Logging</p>
+                <p className="text-[11px] text-zinc-400 mt-0.5 leading-relaxed">
+                  Log sets, reps, and RPE completely offline with local browser IndexedDB storage[cite: 1]. No slow network calls between exercises.
+                </p>
               </div>
             </div>
-            <div className="flex items-center gap-3 bg-zinc-900 border border-zinc-800 p-3.5 rounded-xl">
-              <Cloud className="w-5 h-5 text-white shrink-0" />
+
+            <div className="flex items-start gap-3 bg-zinc-900 border border-zinc-800 p-3.5 rounded-xl">
+              <div className="p-2 bg-zinc-950 border border-zinc-800 rounded-lg text-white shrink-0 mt-0.5">
+                <Cloud className="w-4 h-4" />
+              </div>
               <div>
-                <p className="text-xs font-semibold text-white">Google Drive Backup</p>
-                <p className="text-[11px] text-zinc-400">Seamless sync across multiple devices.</p>
+                <p className="text-xs font-semibold text-white">Private Google Drive Sync</p>
+                <p className="text-[11px] text-zinc-400 mt-0.5 leading-relaxed">
+                  Backups are restricted solely to your personal Google Drive AppData folder (<code className="text-zinc-300 font-mono text-[10px]">drive.appdata</code>)[cite: 2]. We run no servers that read or store your fitness logs.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-3 bg-zinc-900 border border-zinc-800 p-3.5 rounded-xl">
+              <div className="p-2 bg-zinc-950 border border-zinc-800 rounded-lg text-white shrink-0 mt-0.5">
+                <Lock className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-white">100% User Data Ownership</p>
+                <p className="text-[11px] text-zinc-400 mt-0.5 leading-relaxed">
+                  Export or import your full database as raw JSON at any time[cite: 5, 8]. Delete your data whenever you choose with full transparency.
+                </p>
               </div>
             </div>
           </div>
         </div>
 
-        <div className="space-y-3 pt-6">
+        {/* Action Buttons & Public Legal Links */}
+        <div className="space-y-3 pt-4">
           <button
             onClick={handleStartSignIn}
-            className="w-full py-3.5 bg-white text-black hover:bg-zinc-200 rounded-xl text-sm font-bold flex items-center justify-center gap-2 shadow-xl active:scale-[0.98] transition-transform"
+            className="w-full py-3.5 bg-white text-black hover:bg-zinc-200 rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-xl active:scale-[0.98] transition-transform"
           >
             <span>Sign In with Google</span>
           </button>
@@ -302,16 +335,35 @@ export default function Home() {
               setIsAuthenticated(true);
               window.dispatchEvent(new Event("repwise_auth_changed"));
             }}
-            className="w-full py-2.5 bg-transparent border border-zinc-800 text-zinc-400 hover:text-zinc-200 rounded-xl text-xs font-semibold active:scale-[0.98] transition-transform"
+            className="w-full py-2.5 bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white rounded-xl text-xs font-semibold active:scale-[0.98] transition-all"
           >
             Continue as Guest (Offline Only)
           </button>
+
+          {/* Compliance Legal Links */}
+          <div className="flex items-center justify-center gap-4 text-[11px] text-zinc-500 pt-3">
+            <Link
+              href="/privacy"
+              className="flex items-center gap-1 hover:text-zinc-300 underline underline-offset-4"
+            >
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>Privacy Policy</span>
+            </Link>
+            <span>•</span>
+            <Link
+              href="/terms"
+              className="flex items-center gap-1 hover:text-zinc-300 underline underline-offset-4"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>Terms of Service</span>
+            </Link>
+          </div>
         </div>
       </div>
     );
   }
 
-  // 4. Authenticated Dashboard Screen[cite: 7]
+  // 4. Authenticated Dashboard Screen
   const prs = exercises
     .map((ex) => {
       const exerciseSets = completedSets.filter((s) => s.exerciseId === ex.id);
@@ -455,7 +507,7 @@ export default function Home() {
               </button>
             </div>
 
-            {/* Option 1: Go with the flow / Freestyle */}
+            {/* Option 1: Freestyle */}
             <button
               onClick={handleLaunchFreestyleWorkout}
               className="w-full flex items-center justify-between p-3.5 bg-zinc-950 border border-zinc-800 hover:border-zinc-700 rounded-xl text-left transition-all group"
