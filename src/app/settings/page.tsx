@@ -482,7 +482,7 @@ export default function SettingsView() {
           </Link>
         </div>
         <p className="text-center text-[10px] text-zinc-600 font-mono mt-2">
-          Repwise • Local-First • Version 1.0.0
+          Repwise • Local-First • Version 1.1.0
         </p>
       </div>
 
