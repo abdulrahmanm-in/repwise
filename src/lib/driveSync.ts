@@ -65,8 +65,23 @@ export function clearStoredUserProfile() {
 }
 
 /**
+ * Helper to wipe all local database records
+ */
+export async function wipeAllLocalData() {
+  await Promise.all([
+    db.workouts.clear(),
+    db.workoutExercises.clear(),
+    db.sets.clear(),
+    db.routines.clear(),
+    db.routineItems.clear(),
+    db.bodyWeights.clear(),
+    db.exercises.filter((ex) => Boolean(ex.isCustom)).delete(),
+  ]);
+}
+
+/**
  * Completely logs out user: wipes OAuth tokens, clears local profile,
- * wipes database tables (optional for security), and reloads to the login screen.
+ * wipes database tables (ensuring zero data leakage across accounts), and reloads.
  */
 export async function performFullLogout(clearLocalDatabase: boolean = true) {
   disconnectGoogleDrive();
@@ -76,14 +91,7 @@ export async function performFullLogout(clearLocalDatabase: boolean = true) {
   }
 
   if (clearLocalDatabase) {
-    await Promise.all([
-      db.workouts.clear(),
-      db.workoutExercises.clear(),
-      db.sets.clear(),
-      db.routines.clear(),
-      db.routineItems.clear(),
-      db.bodyWeights.clear(),
-    ]);
+    await wipeAllLocalData();
   }
 
   if (typeof window !== "undefined") {
@@ -203,11 +211,6 @@ export async function pushLatestToDrive(): Promise<boolean> {
   }
 }
 
-/**
- * Debounced auto-sync trigger: executes after a short delay (default 1.5s).
- * Prevents exhausting Google Drive API quotas during active typing while
- * guaranteeing every change gets backed up automatically.
- */
 export function triggerAutoSync(delayMs: number = 1500) {
   const token = getStoredAccessToken();
   if (!token) return;

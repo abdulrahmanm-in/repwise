@@ -1,11 +1,18 @@
+// src/app/layout.tsx
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import Navigation from "@/components/Navigation";
+import ActiveSessionBar from "@/components/ActiveSessionBar";
 
 export const metadata: Metadata = {
   title: "Repwise | Local-First Workout Tracker",
   description: "Minimalist, offline-first workout logging and progress tracking.",
   manifest: "/manifest.json",
+  icons: {
+    icon: "/logo.png",
+    shortcut: "/logo.png",
+    apple: "/logo.png",
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
@@ -33,6 +40,7 @@ export default function RootLayout({
       </head>
       <body className="min-h-screen pb-20 select-none antialiased">
         <main className="max-w-md mx-auto px-4 pt-4">{children}</main>
+        <ActiveSessionBar />
         <Navigation />
       </body>
     </html>

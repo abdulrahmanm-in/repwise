@@ -17,6 +17,9 @@ import {
   RefreshCw,
   ShieldCheck,
   FileText,
+  Timer,
+  AlertTriangle,
+  Trash2,
 } from "lucide-react";
 import { exportDatabaseToJSON, importDatabaseFromJSON } from "@/lib/jsonBackup";
 import {
@@ -24,6 +27,7 @@ import {
   requestDriveAuth,
   getStoredAccessToken,
   disconnectGoogleDrive,
+  deleteDriveAppDataBackup,
 } from "@/lib/driveBackup";
 import {
   fetchAndStoreGoogleProfile,
@@ -32,6 +36,7 @@ import {
   pullLatestFromDrive,
   pushLatestToDrive,
   performFullLogout,
+  wipeAllLocalData,
   GoogleUserProfile,
 } from "@/lib/driveSync";
 import { usePWAInstall } from "@/hooks/usePWAInstall";
@@ -41,6 +46,7 @@ export default function SettingsView() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [driveConnected, setDriveConnected] = useState(false);
   const [userProfile, setUserProfile] = useState<GoogleUserProfile | null>(null);
+  const [timerEnabled, setTimerEnabled] = useState(true);
   const [syncState, setSyncState] = useState<{
     loading: boolean;
     message: string;
@@ -51,9 +57,19 @@ export default function SettingsView() {
     subMessage: "",
   });
 
+  // Modal State for Danger Zone Deletion
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteInputText, setDeleteInputText] = useState("");
+
   const { isInstalled, isIOS, canInstall, triggerInstall } = usePWAInstall();
 
   useEffect(() => {
+    // Rest timer preference
+    const savedTimerPref = localStorage.getItem("repwise_rest_timer_enabled");
+    if (savedTimerPref !== null) {
+      setTimerEnabled(savedTimerPref === "true");
+    }
+
     const token = getStoredAccessToken();
     const cachedProfile = getStoredUserProfile();
 
@@ -96,6 +112,12 @@ export default function SettingsView() {
       }
     });
   }, []);
+
+  const handleToggleTimer = () => {
+    const nextVal = !timerEnabled;
+    setTimerEnabled(nextVal);
+    localStorage.setItem("repwise_rest_timer_enabled", String(nextVal));
+  };
 
   const handleDisconnect = () => {
     disconnectGoogleDrive();
@@ -150,6 +172,33 @@ export default function SettingsView() {
     }
   };
 
+  const handleConfirmDeleteAll = async () => {
+    if (deleteInputText.trim().toUpperCase() !== "DELETE") return;
+
+    setShowDeleteModal(false);
+    setSyncState({
+      loading: true,
+      message: "Purging Data",
+      subMessage: driveConnected
+        ? "Clearing local storage & Google Drive..."
+        : "Clearing local storage...",
+    });
+
+    try {
+      if (driveConnected) {
+        await deleteDriveAppDataBackup();
+      }
+      await wipeAllLocalData();
+      alert("All data has been permanently cleared.");
+      window.location.reload();
+    } catch (e: any) {
+      alert(`Failed to delete data: ${e.message || e}`);
+    } finally {
+      setSyncState({ loading: false, message: "", subMessage: "" });
+      setDeleteInputText("");
+    }
+  };
+
   const handleExportJSON = async () => {
     const json = await exportDatabaseToJSON();
     const blob = new Blob([json], { type: "application/json" });
@@ -181,8 +230,7 @@ export default function SettingsView() {
   };
 
   return (
-    <div className="space-y-6 pb-28">
-      {/* Animated Lifter Loading Overlay for Cloud Operations */}
+    <div className="space-y-6 pb-36">
       <LoadingOverlay
         isLoading={syncState.loading}
         message={syncState.message}
@@ -191,7 +239,7 @@ export default function SettingsView() {
 
       <header className="pt-2">
         <h1 className="text-xl font-bold tracking-tight text-white">Data & Settings</h1>
-        <p className="text-xs text-zinc-400">Manage app installation, cloud sync, and local backups</p>
+        <p className="text-xs text-zinc-400">Manage preferences, cloud sync, and backups</p>
       </header>
 
       {statusMessage && (
@@ -201,14 +249,40 @@ export default function SettingsView() {
         </div>
       )}
 
+      {/* WORKOUT PREFERENCES (Rest Timer Toggle) */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <Timer className="w-4 h-4 text-white" />
+            <div>
+              <p className="text-xs font-semibold text-white">Rest Timer</p>
+              <p className="text-[11px] text-zinc-400">
+                Automatically start timer when completing a set
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleToggleTimer}
+            className={`w-11 h-6 rounded-full transition-colors relative flex items-center px-0.5 ${
+              timerEnabled ? "bg-white" : "bg-zinc-800"
+            }`}
+          >
+            <div
+              className={`w-5 h-5 rounded-full transition-transform ${
+                timerEnabled ? "translate-x-5 bg-black" : "translate-x-0 bg-zinc-500"
+              }`}
+            />
+          </button>
+        </div>
+      </div>
+
       {/* INSTALL APP ON HOME SCREEN */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-3">
         <div className="flex items-center justify-between pb-2 border-b border-zinc-800">
           <div className="flex items-center gap-2">
             <Smartphone className="w-4 h-4 text-white" />
-            <h2 className="text-xs uppercase font-semibold text-zinc-300">
-              Install Repwise App
-            </h2>
+            <h2 className="text-xs uppercase font-semibold text-zinc-300">Install Repwise App</h2>
           </div>
           {isInstalled && (
             <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
@@ -219,12 +293,12 @@ export default function SettingsView() {
 
         {isInstalled ? (
           <p className="text-xs text-zinc-400 leading-relaxed">
-            Repwise is currently installed and running as a standalone app on your device.
+            Repwise is currently running as a standalone app.
           </p>
         ) : canInstall ? (
           <div className="space-y-2">
             <p className="text-xs text-zinc-400 leading-relaxed">
-              Install Repwise to your home screen for instant offline gym access, faster navigation, and a native app display.
+              Install Repwise to your home screen for instant offline gym access.
             </p>
             <button
               onClick={triggerInstall}
@@ -239,17 +313,15 @@ export default function SettingsView() {
               <Share2 className="w-3.5 h-3.5 text-white" /> How to install on iOS:
             </p>
             <ol className="list-decimal list-inside space-y-1 text-zinc-400 pl-1">
-              <li>Tap the <span className="text-white font-medium">Share</span> button at the bottom of Safari.</li>
-              <li>Scroll down and tap <span className="text-white font-medium">Add to Home Screen</span>.</li>
-              <li>Tap <span className="text-white font-medium">Add</span> in the top-right corner.</li>
+              <li>Tap <span className="text-white font-medium">Share</span> in Safari.</li>
+              <li>Tap <span className="text-white font-medium">Add to Home Screen</span>.</li>
+              <li>Tap <span className="text-white font-medium">Add</span>.</li>
             </ol>
           </div>
         ) : (
-          <div className="space-y-2">
-            <p className="text-xs text-zinc-400 leading-relaxed">
-              Open your browser menu (the three dots in the top right corner) and tap <span className="text-white font-medium">Install app</span> or <span className="text-white font-medium">Add to Home screen</span>.
-            </p>
-          </div>
+          <p className="text-xs text-zinc-400 leading-relaxed">
+            Open your browser menu and tap <span className="text-white font-medium">Install app</span> or <span className="text-white font-medium">Add to Home screen</span>.
+          </p>
         )}
       </div>
 
@@ -258,9 +330,7 @@ export default function SettingsView() {
         <div className="flex items-center justify-between pb-2 border-b border-zinc-800">
           <div className="flex items-center gap-2">
             <Cloud className="w-4 h-4 text-white" />
-            <h2 className="text-xs uppercase font-semibold text-zinc-300">
-              Cloud Storage (Google Drive)
-            </h2>
+            <h2 className="text-xs uppercase font-semibold text-zinc-300">Cloud Storage (Google Drive)</h2>
           </div>
           {driveConnected && (
             <button
@@ -275,7 +345,7 @@ export default function SettingsView() {
         {!driveConnected ? (
           <div className="space-y-3">
             <p className="text-xs text-zinc-400 leading-relaxed">
-              Connect your Google account to automatically preserve your routines and workouts directly inside your private Google Drive app storage.
+              Connect Google Drive to preserve routines and logs in your private Drive AppData folder[cite: 1, 2].
             </p>
             <button
               onClick={requestDriveAuth}
@@ -356,21 +426,43 @@ export default function SettingsView() {
         </div>
       </div>
 
-      {/* LOGOUT BUTTON */}
-      <button
-        onClick={() => {
-          if (confirm("Log out completely and return to the login screen?")) {
-            performFullLogout(false);
-            window.location.href = "/";
-          }
-        }}
-        className="w-full py-3 bg-rose-500/10 border border-rose-500/20 hover:bg-rose-500/20 text-rose-400 font-semibold text-xs rounded-xl transition-colors flex items-center justify-center gap-1.5"
-      >
-        <LogOut className="w-4 h-4" />
-        <span>Log Out</span>
-      </button>
+      {/* DANGER ZONE */}
+      <div className="bg-rose-950/20 border border-rose-900/40 rounded-2xl p-4 space-y-3">
+        <div className="flex items-center gap-2 pb-1 text-rose-400">
+          <AlertTriangle className="w-4 h-4" />
+          <h2 className="text-xs uppercase font-bold tracking-wider">Danger Zone</h2>
+        </div>
+        <p className="text-xs text-zinc-400">
+          Permanently erase all your workout history, routines, and custom exercises.
+        </p>
+        <button
+          onClick={() => {
+            setDeleteInputText("");
+            setShowDeleteModal(true);
+          }}
+          className="w-full py-2.5 bg-rose-500/10 border border-rose-500/30 hover:bg-rose-500/20 text-rose-400 font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-colors active:scale-[0.99]"
+        >
+          <Trash2 className="w-4 h-4" />
+          <span>Delete All Data</span>
+        </button>
+      </div>
 
-      {/* LEGAL & POLICY LINKS (At the end of Settings) */}
+      {/* LOGOUT BUTTON (Spaced away from danger zone) */}
+      <div className="pt-2">
+        <button
+          onClick={() => {
+            if (confirm("Log out completely and return to the login screen?")) {
+              performFullLogout(true);
+            }
+          }}
+          className="w-full py-3 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 hover:text-white font-semibold text-xs rounded-xl transition-colors flex items-center justify-center gap-1.5 active:scale-[0.99]"
+        >
+          <LogOut className="w-4 h-4" />
+          <span>Log Out</span>
+        </button>
+      </div>
+
+      {/* LEGAL & POLICY LINKS */}
       <div className="pt-2 border-t border-zinc-800/80">
         <div className="flex items-center justify-center gap-4 text-xs text-zinc-400">
           <Link
@@ -393,6 +485,60 @@ export default function SettingsView() {
           Repwise • Local-First • Version 1.0.0
         </p>
       </div>
+
+      {/* Permanent Deletion Confirmation Modal */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 z-[70] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 max-w-sm w-full space-y-4 shadow-2xl">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white">Delete All Data?</h3>
+                <p className="text-xs text-zinc-400">This action cannot be undone.</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-zinc-300 leading-relaxed">
+              This will permanently delete all workouts, custom exercises, routines, and backups
+              {driveConnected ? " from this device and Google Drive" : ""}.
+            </p>
+
+            <div className="space-y-1.5 pt-1">
+              <label className="text-[11px] font-semibold text-zinc-400 block">
+                Type <span className="font-mono text-white font-bold">DELETE</span> to confirm:
+              </label>
+              <input
+                type="text"
+                autoFocus
+                placeholder="DELETE"
+                value={deleteInputText}
+                onChange={(e) => setDeleteInputText(e.target.value)}
+                className="w-full bg-zinc-950 border border-zinc-700 focus:border-rose-500 rounded-xl px-3 py-2 text-xs text-white outline-none font-mono tracking-widest uppercase"
+              />
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowDeleteModal(false)}
+                className="flex-1 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white rounded-xl text-xs font-semibold transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deleteInputText.trim().toUpperCase() !== "DELETE"}
+                onClick={handleConfirmDeleteAll}
+                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-30 disabled:hover:bg-rose-600 text-white rounded-xl text-xs font-bold transition-all shadow-md active:scale-95"
+              >
+                Permanently Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

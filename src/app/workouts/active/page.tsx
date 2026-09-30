@@ -3,8 +3,8 @@
 
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "@/db/database";
-import { WorkoutExercise, WorkoutSet, Exercise, Workout, RoutineItem } from "@/types";
-import { useState } from "react";
+import { WorkoutExercise, WorkoutSet, Exercise, Workout, RoutineItem, BodyWeight } from "@/types";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   Plus,
@@ -14,6 +14,7 @@ import {
   Calendar,
   BookmarkPlus,
   RefreshCw,
+  Scale,
 } from "lucide-react";
 import SetRow from "@/components/SetRow";
 import RestTimerModal from "@/components/RestTimerModal";
@@ -52,6 +53,21 @@ export default function ActiveWorkoutView() {
   const exercises = useLiveQuery<Exercise[]>(() => db.exercises.toArray(), []) || [];
   const exerciseMap = new Map(exercises.map((e) => [e.id, e]));
 
+  // Latest body weight lookup for pre-filling
+  const latestRecordedWeight = useLiveQuery<BodyWeight | undefined>(
+    () => db.bodyWeights.orderBy("recordedAt").reverse().first(),
+    []
+  );
+
+  const [sessionBodyWeight, setSessionBodyWeight] = useState<string>("");
+  const [hasEnteredWeight, setHasEnteredWeight] = useState(false);
+
+  useEffect(() => {
+    if (latestRecordedWeight && !hasEnteredWeight) {
+      setSessionBodyWeight(String(latestRecordedWeight.weightKg));
+    }
+  }, [latestRecordedWeight, hasEnteredWeight]);
+
   // Ghost Values map
   const previousPerformanceMap = useLiveQuery(async () => {
     const map = new Map<string, WorkoutSet[]>();
@@ -78,7 +94,6 @@ export default function ActiveWorkoutView() {
     return map;
   }, [exercises]);
 
-  // Read original template items if this workout originated from a routine
   const originalRoutineItems = useLiveQuery<RoutineItem[]>(async () => {
     if (!activeWorkout?.routineId) return [];
     return db.routineItems
@@ -87,10 +102,8 @@ export default function ActiveWorkoutView() {
       .sortBy("orderIndex");
   }, [activeWorkout?.routineId]) || [];
 
-  // Check if current workout differs from the saved routine template
   const isRoutineModified = (() => {
     if (!activeWorkout?.routineId || originalRoutineItems.length === 0) return false;
-
     if (workoutExercises.length !== originalRoutineItems.length) return true;
 
     for (let i = 0; i < workoutExercises.length; i++) {
@@ -101,7 +114,6 @@ export default function ActiveWorkoutView() {
       const currentExSets = sets.filter((s) => s.workoutExerciseId === we.id);
       if (currentExSets.length !== orig.targetSets) return true;
     }
-
     return false;
   })();
 
@@ -153,16 +165,12 @@ export default function ActiveWorkoutView() {
     if (!shouldDiscard) return;
 
     await db.workouts.delete(activeWorkout.id);
-    await db.workoutExercises
-      .where("workoutId")
-      .equals(activeWorkout.id)
-      .delete();
+    await db.workoutExercises.where("workoutId").equals(activeWorkout.id).delete();
     await db.sets.where("workoutId").equals(activeWorkout.id).delete();
 
     router.push("/");
   };
 
-  // Sync current exercises back to the routine template
   const syncWorkoutToRoutineTemplate = async (routineId: string) => {
     await db.routineItems.where("routineId").equals(routineId).delete();
 
@@ -192,6 +200,24 @@ export default function ActiveWorkoutView() {
       );
       if (shouldUpdate) {
         await syncWorkoutToRoutineTemplate(activeWorkout.routineId);
+      }
+    }
+
+    // Save updated body weight if entered
+    const parsedWeight = parseFloat(sessionBodyWeight);
+    if (!isNaN(parsedWeight) && parsedWeight > 0) {
+      if (latestRecordedWeight && latestRecordedWeight.weightKg !== parsedWeight) {
+        await db.bodyWeights.add({
+          id: `bw_${Date.now()}`,
+          recordedAt: Date.now(),
+          weightKg: parsedWeight,
+        });
+      } else if (!latestRecordedWeight) {
+        await db.bodyWeights.add({
+          id: `bw_${Date.now()}`,
+          recordedAt: Date.now(),
+          weightKg: parsedWeight,
+        });
       }
     }
 
@@ -358,38 +384,57 @@ export default function ActiveWorkoutView() {
         </div>
       </div>
 
-      {/* Date Picker & Context-Aware Actions */}
-      <div className="flex justify-between items-center gap-2 bg-zinc-900 border border-zinc-800 p-2.5 rounded-xl">
-        <div className="flex items-center gap-2 text-xs text-zinc-300">
+      {/* Date Picker, Body Weight, and Context Actions */}
+      <div className="grid grid-cols-2 gap-2">
+        {/* Date Selector */}
+        <div className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 p-2.5 rounded-xl text-xs text-zinc-300">
           <Calendar className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
           <input
             type="date"
             value={currentIsoDate}
             onChange={(e) => handleDateChange(e.target.value)}
-            className="bg-zinc-800 border border-zinc-700 text-white text-xs rounded-lg px-2 py-1 outline-none font-mono"
+            className="bg-zinc-800 border border-zinc-700 text-white text-xs rounded-lg px-2 py-1 outline-none font-mono w-full"
           />
         </div>
 
-        {!activeWorkout.routineId ? (
-          <button
-            onClick={handleSaveAsRoutine}
-            className="text-xs bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 px-2.5 py-1 rounded-lg flex items-center gap-1.5 font-medium transition-colors"
-          >
-            <BookmarkPlus className="w-3.5 h-3.5" /> Save as Routine
-          </button>
-        ) : isRoutineModified ? (
-          <button
-            onClick={async () => {
-              await syncWorkoutToRoutineTemplate(activeWorkout.routineId!);
-              alert("Routine template updated!");
-              triggerAutoSync();
+        {/* Body Weight Logger */}
+        <div className="flex items-center gap-1.5 bg-zinc-900 border border-zinc-800 p-2.5 rounded-xl text-xs text-zinc-300">
+          <Scale className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+          <input
+            type="number"
+            step="0.1"
+            placeholder={latestRecordedWeight ? `${latestRecordedWeight.weightKg}` : "Weight"}
+            value={sessionBodyWeight}
+            onChange={(e) => {
+              setHasEnteredWeight(true);
+              setSessionBodyWeight(e.target.value);
             }}
-            className="text-xs bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 px-2.5 py-1 rounded-lg flex items-center gap-1.5 font-medium transition-colors"
-          >
-            <RefreshCw className="w-3.5 h-3.5" /> Update Routine
-          </button>
-        ) : null}
+            className="bg-zinc-800 border border-zinc-700 text-white text-xs rounded-lg px-2 py-1 outline-none font-mono w-full"
+          />
+          <span className="text-[10px] text-zinc-500 font-semibold">kg</span>
+        </div>
       </div>
+
+      {/* Routine Sync Bar */}
+      {!activeWorkout.routineId ? (
+        <button
+          onClick={handleSaveAsRoutine}
+          className="w-full text-xs bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-200 p-2.5 rounded-xl flex items-center justify-center gap-1.5 font-medium transition-colors"
+        >
+          <BookmarkPlus className="w-3.5 h-3.5" /> Save Workout as New Routine
+        </button>
+      ) : isRoutineModified ? (
+        <button
+          onClick={async () => {
+            await syncWorkoutToRoutineTemplate(activeWorkout.routineId!);
+            alert("Routine template updated!");
+            triggerAutoSync();
+          }}
+          className="w-full text-xs bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 p-2.5 rounded-xl flex items-center justify-center gap-1.5 font-medium transition-colors"
+        >
+          <RefreshCw className="w-3.5 h-3.5" /> Update Original Routine Template
+        </button>
+      ) : null}
 
       {/* Exercises List */}
       <div className="space-y-4">
@@ -456,7 +501,12 @@ export default function ActiveWorkoutView() {
                           isCompleted: updatedStatus,
                           completedAt: updatedStatus ? Date.now() : undefined,
                         });
-                        if (updatedStatus) {
+
+                        // Only auto-trigger timer if rest timer is enabled
+                        const timerPref = localStorage.getItem("repwise_rest_timer_enabled");
+                        const isTimerEnabled = timerPref === null ? true : timerPref === "true";
+
+                        if (updatedStatus && isTimerEnabled) {
                           startTimer(90);
                         }
                         triggerAutoSync(500);
@@ -485,7 +535,7 @@ export default function ActiveWorkoutView() {
         <Plus className="w-4 h-4" /> Add Exercise
       </button>
 
-      {/* Shared Unified Exercise Selector Modal */}
+      {/* Shared Exercise Selector Modal */}
       <ExerciseSelectorModal
         isOpen={showExerciseSelector}
         onClose={() => setShowExerciseSelector(false)}
