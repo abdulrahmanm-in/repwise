@@ -33,8 +33,9 @@ interface PlannedItem {
   targetReps: number;
 }
 
-const MUSCLE_GROUPS: (MuscleGroup | "All")[] = [
+const MUSCLE_GROUPS: (MuscleGroup | "All" | "Custom")[] = [
   "All",
+  "Custom",
   "Chest",
   "Back",
   "Legs",
@@ -58,7 +59,7 @@ export default function WorkoutsTab() {
 
   // Standalone Exercise Library Tab State
   const [librarySearch, setLibrarySearch] = useState("");
-  const [libraryMuscle, setLibraryMuscle] = useState<MuscleGroup | "All">("All");
+  const [libraryMuscle, setLibraryMuscle] = useState<MuscleGroup | "All" | "Custom">("All");
   const [showCreateExerciseModal, setShowCreateExerciseModal] = useState(false);
 
   // AI Import Routine Modal State
@@ -78,9 +79,13 @@ export default function WorkoutsTab() {
   const exercises = useLiveQuery<Exercise[]>(() => db.exercises.toArray(), []) || [];
   const exerciseMap = new Map(exercises.map((e) => [e.id, e]));
 
+  const customExercisesCount = exercises.filter((e) => Boolean(e.isCustom)).length;
+  const isRoutineLimitReached = routines.length >= 10;
+  const isCustomExerciseLimitReached = customExercisesCount >= 20;
+
   const handleOpenCreateRoutine = () => {
-    if (routines.length >= 10) {
-      alert("Routine limit reached (maximum 10 routines). Please delete an existing routine to create a new one.");
+    if (isRoutineLimitReached) {
+      alert("Routine limit reached (maximum 10 routines). Please delete an existing routine to plan a new one.");
       return;
     }
     setEditingRoutineId(null);
@@ -128,7 +133,6 @@ export default function WorkoutsTab() {
       return;
     }
 
-    // Check for duplicate routine names (ignoring self if currently editing)
     const isDuplicate = routines.some(
       (r) =>
         r.id !== editingRoutineId &&
@@ -159,8 +163,8 @@ export default function WorkoutsTab() {
         });
       }
     } else {
-      if (routines.length >= 10) {
-        alert("Maximum limit of 10 routines reached.");
+      if (isRoutineLimitReached) {
+        alert("Maximum limit of 10 routines reached. Please delete an existing routine first.");
         return;
       }
 
@@ -191,7 +195,6 @@ export default function WorkoutsTab() {
     setPlannedItems([]);
   };
 
-  // Launch Routine with Active Workout Check
   const initiateRoutineStart = async (routine: Routine) => {
     const unfinished = await db.workouts.filter((w) => !w.isCompleted).toArray();
     if (unfinished.length > 0) {
@@ -280,7 +283,12 @@ export default function WorkoutsTab() {
     const matchSearch =
       e.name.toLowerCase().includes(librarySearch.toLowerCase()) ||
       e.equipment.toLowerCase().includes(librarySearch.toLowerCase());
-    const matchMuscle = libraryMuscle === "All" || e.targetMuscle === libraryMuscle;
+    const matchMuscle =
+      libraryMuscle === "All"
+        ? true
+        : libraryMuscle === "Custom"
+        ? Boolean(e.isCustom)
+        : e.targetMuscle === libraryMuscle;
     return matchSearch && matchMuscle;
   });
 
@@ -328,18 +336,34 @@ export default function WorkoutsTab() {
         <div className="space-y-3">
           <div className="flex justify-between items-center py-1">
             <span className="text-xs uppercase text-zinc-400 font-semibold tracking-wider">
-              Saved Templates ({routines.length}/10)
+              Routines ({routines.length}/10)
             </span>
             <div className="flex gap-2">
               <button
-                onClick={() => setShowAIModal(true)}
-                className="text-xs bg-zinc-900 border border-zinc-800 hover:border-zinc-600 text-white font-semibold px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors"
+                onClick={() => {
+                  if (isRoutineLimitReached) {
+                    alert("Routine limit reached (10/10). Please delete an existing routine to import more.");
+                    return;
+                  }
+                  setShowAIModal(true);
+                }}
+                className={clsx(
+                  "text-xs border font-semibold px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 transition-all active:scale-95",
+                  isRoutineLimitReached
+                    ? "bg-zinc-900 border-zinc-800 text-zinc-500 hover:border-zinc-700"
+                    : "bg-zinc-900 border-zinc-800 hover:border-zinc-600 text-white"
+                )}
               >
-                <Sparkles className="w-3.5 h-3.5 text-white" /> AI Import
+                <Sparkles className="w-3.5 h-3.5" /> AI Import
               </button>
               <button
                 onClick={handleOpenCreateRoutine}
-                className="text-xs bg-white text-black hover:bg-zinc-200 font-bold px-3 py-1.5 rounded-lg flex items-center gap-1 transition-all"
+                className={clsx(
+                  "text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-1 transition-all active:scale-95",
+                  isRoutineLimitReached
+                    ? "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+                    : "bg-white text-black hover:bg-zinc-200"
+                )}
               >
                 <Plus className="w-3.5 h-3.5 stroke-[3]" /> Plan Routine
               </button>
@@ -404,11 +428,24 @@ export default function WorkoutsTab() {
         <div className="space-y-3">
           <div className="flex justify-between items-center">
             <span className="text-xs uppercase text-zinc-400 font-semibold tracking-wider">
-              Exercise Catalog ({filteredLibrary.length})
+              {libraryMuscle === "Custom"
+                ? `Custom Exercises (${customExercisesCount}/20)`
+                : `Exercise Catalog (${filteredLibrary.length})`}
             </span>
             <button
-              onClick={() => setShowCreateExerciseModal(true)}
-              className="text-xs bg-white text-black hover:bg-zinc-200 font-bold px-3 py-1.5 rounded-lg flex items-center gap-1 transition-all"
+              onClick={() => {
+                if (isCustomExerciseLimitReached) {
+                  alert("Custom exercise limit reached (20/20). Please delete an existing custom exercise to add more.");
+                  return;
+                }
+                setShowCreateExerciseModal(true);
+              }}
+              className={clsx(
+                "text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-1 transition-all active:scale-95",
+                isCustomExerciseLimitReached
+                  ? "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+                  : "bg-white text-black hover:bg-zinc-200"
+              )}
             >
               <Plus className="w-3.5 h-3.5 stroke-[3]" /> Add Custom
             </button>
@@ -437,7 +474,7 @@ export default function WorkoutsTab() {
                     : "bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-200"
                 )}
               >
-                {m}
+                {m === "Custom" ? `Custom (${customExercisesCount}/20)` : m}
               </button>
             ))}
           </div>
@@ -515,11 +552,10 @@ export default function WorkoutsTab() {
         </div>
       )}
 
-      {/* Routine Planner / Editor Modal (Centered Card with Visible, Fixed Footer) */}
+      {/* Routine Planner / Editor Modal */}
       {isRoutineModalOpen && (
         <div className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 pb-20 select-none">
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 w-full max-w-md h-[82vh] max-h-[640px] flex flex-col shadow-2xl">
-            {/* Header */}
             <div className="flex justify-between items-center pb-3 border-b border-zinc-800 shrink-0">
               <h2 className="text-base font-bold text-white">
                 {editingRoutineId ? "Edit Routine Template" : "New Routine Template"}
@@ -532,7 +568,6 @@ export default function WorkoutsTab() {
               </button>
             </div>
 
-            {/* Scrollable Form Body */}
             <div className="overflow-y-auto space-y-4 py-4 flex-1 pr-1">
               <div>
                 <label className="block text-xs uppercase font-semibold text-zinc-400 mb-1">
@@ -647,7 +682,6 @@ export default function WorkoutsTab() {
               </div>
             </div>
 
-            {/* Modal Bottom Action Bar (Fixed, never pushed offscreen) */}
             <div className="pt-3 border-t border-zinc-800 shrink-0">
               <button
                 onClick={handleSaveRoutine}

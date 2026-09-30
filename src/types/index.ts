@@ -1,3 +1,5 @@
+// src/types/index.ts
+
 export type MuscleGroup =
   | "Chest"
   | "Back"

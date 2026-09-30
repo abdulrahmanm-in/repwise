@@ -1,4 +1,4 @@
-// src/app/settings/exercises/page.tsx
+// src/app/workouts/exercises/page.tsx
 "use client";
 
 import { useState } from "react";
@@ -9,8 +9,9 @@ import { MuscleGroup, EquipmentType, Exercise } from "@/types";
 import { ArrowLeft, Search, Plus, Trash2, X } from "lucide-react";
 import clsx from "clsx";
 
-const MUSCLE_GROUPS: (MuscleGroup | "All")[] = [
+const MUSCLE_GROUPS: (MuscleGroup | "All" | "Custom")[] = [
   "All",
+  "Custom",
   "Chest",
   "Back",
   "Legs",
@@ -22,7 +23,7 @@ const MUSCLE_GROUPS: (MuscleGroup | "All")[] = [
 export default function ExerciseLibraryPage() {
   const router = useRouter();
   const [exerciseSearch, setExerciseSearch] = useState("");
-  const [selectedMuscle, setSelectedMuscle] = useState<MuscleGroup | "All">("All");
+  const [selectedMuscle, setSelectedMuscle] = useState<MuscleGroup | "All" | "Custom">("All");
   const [showAddModal, setShowAddModal] = useState(false);
 
   // New Exercise State
@@ -32,27 +33,49 @@ export default function ExerciseLibraryPage() {
   const [instructions, setInstructions] = useState("");
 
   const exercises = useLiveQuery(() => db.exercises.toArray(), []) || [];
+  const customExercisesCount = exercises.filter((e) => Boolean(e.isCustom)).length;
+  const isCustomLimitReached = customExercisesCount >= 20;
 
   const filtered = exercises.filter((e) => {
     const matchesSearch =
       e.name.toLowerCase().includes(exerciseSearch.toLowerCase()) ||
       e.equipment.toLowerCase().includes(exerciseSearch.toLowerCase());
     const matchesMuscle =
-      selectedMuscle === "All" || e.targetMuscle === selectedMuscle;
+      selectedMuscle === "All"
+        ? true
+        : selectedMuscle === "Custom"
+        ? Boolean(e.isCustom)
+        : e.targetMuscle === selectedMuscle;
     return matchesSearch && matchesMuscle;
   });
 
   const handleCreate = async () => {
-    if (!name.trim()) return;
+    const trimmedName = name.trim();
+    if (!trimmedName) return;
+
+    if (customExercisesCount >= 20) {
+      alert("Custom exercise limit reached (maximum 20). Delete an existing custom exercise first.");
+      return;
+    }
+
+    const alreadyExists = exercises.some(
+      (e) => e.name.trim().toLowerCase() === trimmedName.toLowerCase()
+    );
+    if (alreadyExists) {
+      alert(`An exercise named "${trimmedName}" already exists.`);
+      return;
+    }
+
     await db.exercises.add({
       id: `custom_${Date.now()}`,
-      name: name.trim(),
+      name: trimmedName,
       targetMuscle,
       equipment,
       instructions: instructions.trim() || undefined,
       isCustom: true,
       isArchived: false,
     });
+
     setName("");
     setInstructions("");
     setShowAddModal(false);
@@ -69,11 +92,25 @@ export default function ExerciseLibraryPage() {
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <h1 className="text-base font-bold text-white">Exercise Library</h1>
+          <div>
+            <h1 className="text-base font-bold text-white">Exercise Library</h1>
+            <p className="text-[11px] text-zinc-400">Custom ({customExercisesCount}/20)</p>
+          </div>
         </div>
         <button
-          onClick={() => setShowAddModal(true)}
-          className="text-xs bg-white text-black font-bold px-2.5 py-1.5 rounded-lg flex items-center gap-1"
+          onClick={() => {
+            if (isCustomLimitReached) {
+              alert("Custom exercise limit reached (20/20). Delete an existing custom exercise to add more.");
+              return;
+            }
+            setShowAddModal(true);
+          }}
+          className={clsx(
+            "text-xs font-bold px-2.5 py-1.5 rounded-lg flex items-center gap-1 transition-all active:scale-95",
+            isCustomLimitReached
+              ? "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+              : "bg-white text-black hover:bg-zinc-200"
+          )}
         >
           <Plus className="w-3.5 h-3.5 stroke-[3]" /> Add Custom
         </button>
@@ -104,7 +141,7 @@ export default function ExerciseLibraryPage() {
                 : "bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-200"
             )}
           >
-            {m}
+            {m === "Custom" ? `Custom (${customExercisesCount}/20)` : m}
           </button>
         ))}
       </div>
