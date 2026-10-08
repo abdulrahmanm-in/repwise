@@ -34,7 +34,7 @@ export default function ExerciseLibraryPage() {
 
   const exercises = useLiveQuery(() => db.exercises.toArray(), []) || [];
   const customExercisesCount = exercises.filter((e) => Boolean(e.isCustom)).length;
-  const isCustomLimitReached = customExercisesCount >= 20;
+  const isCustomLimitReached = customExercisesCount >= 50;
 
   const filtered = exercises.filter((e) => {
     const matchesSearch =
@@ -53,8 +53,8 @@ export default function ExerciseLibraryPage() {
     const trimmedName = name.trim();
     if (!trimmedName) return;
 
-    if (customExercisesCount >= 20) {
-      alert("Custom exercise limit reached (maximum 20). Delete an existing custom exercise first.");
+    if (customExercisesCount >= 50) {
+      alert("Custom exercise limit reached (maximum 50). Delete an existing custom exercise first.");
       return;
     }
 
@@ -94,13 +94,13 @@ export default function ExerciseLibraryPage() {
           </button>
           <div>
             <h1 className="text-base font-bold text-white">Exercise Library</h1>
-            <p className="text-[11px] text-zinc-400">Custom ({customExercisesCount}/20)</p>
+            <p className="text-[11px] text-zinc-400">Custom ({customExercisesCount}/50)</p>
           </div>
         </div>
         <button
           onClick={() => {
             if (isCustomLimitReached) {
-              alert("Custom exercise limit reached (20/20). Delete an existing custom exercise to add more.");
+              alert("Custom exercise limit reached (50/50). Delete an existing custom exercise to add more.");
               return;
             }
             setShowAddModal(true);
@@ -141,7 +141,7 @@ export default function ExerciseLibraryPage() {
                 : "bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-200"
             )}
           >
-            {m === "Custom" ? `Custom (${customExercisesCount}/20)` : m}
+            {m === "Custom" ? `Custom (${customExercisesCount}/50)` : m}
           </button>
         ))}
       </div>

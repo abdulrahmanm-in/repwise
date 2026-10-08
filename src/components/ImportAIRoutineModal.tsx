@@ -273,7 +273,7 @@ export default function ImportAIRoutineModal({
       );
       setExistingTitlesSet(existingTitles);
 
-      // Check Custom Exercise Cap (max 20)
+      // Check Custom Exercise Cap (max 50)
       const currentCustomExercises = await db.exercises.filter((ex) => Boolean(ex.isCustom)).toArray();
       const exerciseNameMap = new Map(existingExercises.map((e) => [e.name.trim().toLowerCase(), e]));
 
@@ -289,13 +289,13 @@ export default function ImportAIRoutineModal({
         }
       }
 
-      // ONLY throw if this import is introducing NEW custom exercises beyond the 20 limit
+      // ONLY throw if this import is introducing NEW custom exercises beyond the 50 limit
       if (
         newCustomToCreate.size > 0 &&
-        currentCustomExercises.length + newCustomToCreate.size > 20
+        currentCustomExercises.length + newCustomToCreate.size > 50
       ) {
         throw new Error(
-          `Custom exercise limit exceeded (${currentCustomExercises.length}/20). This import would add ${newCustomToCreate.size} new custom exercise(s), which exceeds the 20-exercise maximum.`
+          `Custom exercise limit exceeded (${currentCustomExercises.length}/50). This import would add ${newCustomToCreate.size} new custom exercise(s), which exceeds the 50-exercise maximum.`
         );
       }
 
@@ -371,7 +371,7 @@ export default function ImportAIRoutineModal({
         );
       }
 
-      // Verify Custom Exercise Limit
+      // Verify Custom Exercise Limit (max 50)
       const currentCustomExercises = await db.exercises.filter((ex) => Boolean(ex.isCustom)).toArray();
       const exerciseMap = new Map(
         existingExercises.map((e) => [e.name.trim().toLowerCase(), e])
@@ -389,10 +389,10 @@ export default function ImportAIRoutineModal({
 
       if (
         brandNewExercises.size > 0 &&
-        currentCustomExercises.length + brandNewExercises.size > 20
+        currentCustomExercises.length + brandNewExercises.size > 50
       ) {
         throw new Error(
-          `Custom exercise limit reached (${currentCustomExercises.length}/20). Adding ${brandNewExercises.size} new exercise(s) exceeds the maximum of 20.`
+          `Custom exercise limit reached (${currentCustomExercises.length}/50). Adding ${brandNewExercises.size} new exercise(s) exceeds the maximum of 50.`
         );
       }
 
