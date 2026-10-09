@@ -8,6 +8,7 @@ import { db } from "@/db/database";
 import { MuscleGroup, EquipmentType, Exercise } from "@/types";
 import { ArrowLeft, Search, Plus, Trash2, X } from "lucide-react";
 import clsx from "clsx";
+import { generateCanonicalKey } from "@/lib/exerciseKey";
 
 const MUSCLE_GROUPS: (MuscleGroup | "All" | "Custom")[] = [
   "All",
@@ -58,11 +59,14 @@ export default function ExerciseLibraryPage() {
       return;
     }
 
-    const alreadyExists = exercises.some(
-      (e) => e.name.trim().toLowerCase() === trimmedName.toLowerCase()
-    );
-    if (alreadyExists) {
-      alert(`An exercise named "${trimmedName}" already exists.`);
+    const targetKey = generateCanonicalKey(trimmedName, targetMuscle, equipment);
+    const duplicate = exercises.find((e) => {
+      const existingKey = generateCanonicalKey(e.name, e.targetMuscle, e.equipment);
+      return existingKey === targetKey;
+    });
+
+    if (duplicate) {
+      alert(`"${duplicate.name}" already exists in your library for ${equipment} (${targetMuscle}).`);
       return;
     }
 
