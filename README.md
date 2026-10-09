@@ -1,217 +1,303 @@
 # Repwise
 
-### Local-first workout tracking, built for consistency.
+Local-first workout tracking built for consistency.
 
-Repwise is a **mobile-first Progressive Web App (PWA)** for creating workout routines, logging workouts, tracking personal records, and monitoring progress.
+Repwise is a mobile-first Progressive Web App for creating workout routines, logging sessions, tracking personal records, monitoring progress, and backing up data locally or to Google Drive.
 
-It is built with a **local-first architecture**, so workout data is stored directly on the device and the app works offline. Optional Google Drive backup keeps your data recoverable without requiring a backend.
+It runs primarily in the browser using IndexedDB, so it can be used offline after the app has been loaded and its assets cached. There is no required backend for normal day-to-day use.
 
 <p align="center">
-  <img src="public/logo.png" alt="Repwise Logo" width="120" />
+  <img src="public/logo.png" alt="Repwise logo" width="120" />
 </p>
 
 ---
 
-## ✨ Features
+## Overview
 
-* 🏋️ **Workout Routines** — Create and manage reusable workout routines.
-* 📝 **Workout Logging** — Track sets, reps, weight, and completed exercises.
-* 👻 **Previous Performance** — See your previous workout while logging a new one.
-* 🏆 **Personal Records** — Track your all-time best performance for each exercise.
-* 📈 **Progress Tracking** — Monitor strength, volume, and estimated 1RM.
-* 🔥 **Workout Streaks** — Track consistency and workout frequency.
-* ⚖️ **Body Weight** — Record and visualize weight changes over time.
-* ⏱️ **Rest Timer** — Built-in rest timer with audio and vibration support.
-* 📴 **Offline First** — Continue using the app without an internet connection.
-* 💾 **Local Storage** — Workout data is stored locally using IndexedDB.
-* ☁️ **Google Drive Backup** — Optional backup and restore.
-* 📦 **JSON Export & Import** — Keep a portable copy of your data.
+Repwise is designed around a simple principle: your workout data belongs to you, and the app should work with minimal friction in offline or low-connectivity situations.
 
----
+The project currently includes:
 
-## 🛠️ Tech Stack
-
-| Technology           | Purpose                          |
-| -------------------- | -------------------------------- |
-| **Next.js**          | Application framework            |
-| **TypeScript**       | Type-safe development            |
-| **Tailwind CSS**     | UI styling                       |
-| **Dexie.js**         | IndexedDB database               |
-| **IndexedDB**        | Local data storage               |
-| **Recharts**         | Progress charts                  |
-| **Lucide React**     | Icons                            |
-| **Google Drive API** | Optional backup                  |
-| **PWA**              | Installable & offline experience |
+- A custom exercise library with built-in and user-created exercises
+- A routine builder for reusable training plans
+- An active workout session with set logging and rest timer
+- Exercise history and previous performance suggestions while logging
+- Dashboard summaries, streaks, and personal-record tracking
+- Progress analytics for volume, estimated 1RM, and body-weight trends
+- JSON export/import for manual backup and restore
+- Optional Google Drive AppData backup and restore integration
+- Installable PWA behavior for mobile/browser usage
 
 ---
 
-## 🏗️ Architecture
+## Tech stack
 
-Repwise follows a simple **local-first architecture**:
+- Next.js 14
+- React 18
+- TypeScript
+- Tailwind CSS
+- Dexie.js + IndexedDB
+- Recharts
+- Lucide React
+- Google Identity / Google Drive API
+- PWA support via @ducanh2912/next-pwa
+
+---
+
+## Architecture
+
+Repwise is intentionally local-first.
 
 ```text
-              Repwise PWA
-                   │
-          Next.js + React
-                   │
-               Dexie.js
-                   │
-               IndexedDB
-                   │
-          ┌────────┴────────┐
-          │                 │
-      Local Data        Backup
-          │                 │
-          │          ┌──────┴──────┐
-          │          │             │
-          │       JSON File   Google Drive
-          │
-          ▼
-      User Device
+Repwise PWA
+   │
+   ├─ Next.js + React UI
+   │
+   ├─ Dexie.js / IndexedDB
+   │     ├─ exercises
+   │     ├─ routines
+   │     ├─ routineItems
+   │     ├─ workouts
+   │     ├─ workoutExercises
+   │     ├─ sets
+   │     ├─ bodyWeights
+   │     └─ settings
+   │
+   └─ Optional Google Drive sync
+         └─ drive.appdata backup file
 ```
 
-**IndexedDB is the primary source of truth.**
+Key design decisions:
 
-The application does not require a backend for normal usage.
+- Primary storage is IndexedDB on the user's device.
+- Core functionality works without a backend.
+- Google Drive is optional and used only when the user opts in.
+- Exports are portable JSON backups that can be restored manually.
+- Authentication and backup are browser-side, with the app using Google Drive AppData storage for the backup artifact.
 
 ---
 
-## 📂 Project Structure
+## Implemented features
+
+### Workout planning
+
+- Create and manage workout routines
+- Add exercises to routines with set/rep/weight/rest targets
+- Start routine-based or freestyle workouts
+- Reuse previous performance as starting values for the next session
+
+### Workout logging
+
+- Record a workout session and its exercises
+- Log sets with weight, reps, set type, completion state, and notes
+- Use a rest timer while working through the workout
+- Save incomplete sessions and continue later if needed
+
+### Progress and analytics
+
+- Workout streak tracking
+- Estimated 1RM calculation
+- Volume tracking
+- Body-weight logging
+- Exercise PR summaries on the dashboard and progress screens
+
+### Backup and sync
+
+- JSON export/import
+- Google Drive AppData backup upload
+- Google Drive restore from backup
+- Local logout and local data cleanup
+
+### PWA and offline
+
+- Offline-capable app shell
+- Installable on supported browsers/devices
+- Cached assets after first load
+- Local-first data access after assets are cached
+
+---
+
+## Project structure
 
 ```text
 repwise/
 ├── public/
-│   ├── favicon.ico
-│   ├── icon-192.png
-│   ├── icon-512.png
+│   ├── manifest.json
+│   ├── sw.js
 │   ├── logo.png
-│   └── manifest.json
-│
+│   └── ...
 ├── src/
 │   ├── app/
 │   │   ├── dashboard/
-│   │   ├── workouts/
+│   │   ├── privacy/
 │   │   ├── progress/
-│   │   └── settings/
-│   │
+│   │   ├── settings/
+│   │   ├── terms/
+│   │   ├── workouts/
+│   │   ├── layout.tsx
+│   │   ├── loading.tsx
+│   │   └── page.tsx
 │   ├── components/
 │   ├── db/
 │   ├── hooks/
 │   ├── lib/
 │   └── types/
-│
+├── .env.local.example (if used locally)
+├── eslint.config.mjs
 ├── next.config.mjs
 ├── package.json
+├── postcss.config.mjs
 ├── tailwind.config.ts
-└── tsconfig.json
+├── tsconfig.json
+├── LICENSE
+├── README.md
+└── AGENTS.md
 ```
 
 ---
 
-## 🚀 Getting Started
+## Getting started
 
 ### Prerequisites
 
-* Node.js 18.17+
-* npm or pnpm
-* Git
+- Node.js 18.17 or later
+- npm
+- Git
 
-### Installation
+### Install
 
 ```bash
-git clone https://github.com/<your-username>/repwise.git
+git clone https://github.com/abdulrahmanm-in/repwise.git
 cd repwise
 npm install
 ```
 
-### Development
+### Run locally
 
 ```bash
 npm run dev
 ```
 
-Open:
+Then open:
 
-```text
-http://localhost:3000
-```
+- http://localhost:3000
 
----
-
-## ☁️ Google Drive Backup
-
-Google Drive backup is optional.
-
-Create a `.env.local` file:
-
-```env
-NEXT_PUBLIC_GOOGLE_CLIENT_ID=your-google-client-id
-```
-
-To enable backup:
-
-1. Create a Google Cloud project.
-2. Enable the Google Drive API.
-3. Create an OAuth 2.0 Web Client.
-4. Add your development and production URLs as authorized origins.
-5. Use the `drive.appdata` scope.
-
-The application remains fully functional without Google Drive.
-
----
-
-## 📱 PWA
-
-Repwise can be installed on supported devices as a Progressive Web App.
-
-For production PWA testing:
+### Production build
 
 ```bash
 npm run build
 npm run start
 ```
 
-Then open the application in a supported browser and install it from the browser's install option.
+---
+
+## Optional Google Drive setup
+
+Google Drive backup is optional. The app works without it.
+
+To enable backup, create an OAuth client in Google Cloud and add the client ID to your local environment:
+
+```env
+NEXT_PUBLIC_GOOGLE_CLIENT_ID=your-google-client-id
+```
+
+Then restart the development server.
+
+Important:
+
+- The app requests the Google Drive AppData scope for a private app-data backup file.
+- The client ID is public-facing by design and is not a secret.
+- Do not place client secrets or private credentials in `NEXT_PUBLIC_` variables.
+- Make sure the Google OAuth allowed origins and redirect URIs match your app deployment.
 
 ---
 
-## 🔐 Data & Privacy
+## Data and privacy
 
-Repwise is designed around **data ownership**.
+Repwise is built around data ownership and privacy by default.
 
-* No account is required for normal usage.
-* Workout data is stored locally.
-* The app works offline.
-* Google Drive backup is optional.
-* Data can be exported as JSON.
-* No backend is required for the core application.
+- No account is required for standard offline usage.
+- Workout logs, routines, and settings are stored in browser IndexedDB.
+- Data is tied to the browser profile/device unless backed up elsewhere.
+- Google Drive is optional and only used when explicitly connected.
+- JSON exports provide a portable backup path.
 
----
-
-## 🗺️ Roadmap
-
-* [x] Workout routines
-* [x] Workout logging
-* [x] Workout history
-* [x] Personal records
-* [x] Progress tracking
-* [x] Body weight tracking
-* [x] Workout streaks
-* [x] Rest timer
-* [x] Offline support
-* [x] PWA support
-* [x] JSON export/import
-* [x] Google Drive backup
-* [ ] Progressive overload suggestions
-* [ ] Health Connect integration
+Because local browser storage is not a full backup system, users should regularly export JSON backups or use Google Drive sync if they want an external copy.
 
 ---
 
-## 📄 License
+## Current status
 
-This project is licensed under the MIT License.
+This project is a working local-first fitness tracker and PWA. The main implemented flows are:
 
-See the [LICENSE](LICENSE) file for details.
+- exercise management
+- routine creation
+- workout session logging
+- progress dashboard and analytics
+- local persistence and manual/optional cloud backup
+- installable mobile-friendly UI
+
+The app is ready for local usage and iterative feature expansion, especially in the areas of test coverage, stronger data/migration management, and advanced coaching recommendations.
+
+---
+
+## Suggested improvements
+
+The project is already functional and polished for a personal tracking app. The next improvements that would add the most value are:
+
+1. Automated testing
+   - Add unit tests for formulas and backup/import logic.
+   - Add integration tests for routine creation, workout completion, and restore flows.
+
+2. Stronger data migration/versioning
+   - Introduce structured schema versioning and migration scripts for Dexie upgrades.
+   - Prevent future breaking changes when adding new fields or tables.
+
+3. Better auth and sync state management
+   - Centralize Google Drive and local auth state to reduce duplication across screens.
+   - Add clearer user-facing sync status and retry handling.
+
+4. Safer backup/restore UX
+   - Add explicit conflict resolution and restore previews before replacing local data.
+   - Warn clearly when a backup would override a current local dataset.
+
+5. More workout intelligence
+   - Add progressive overload suggestions based on recent performance.
+   - Explore trend-based recommendations and volume load analysis.
+
+6. Improved accessibility and testing on real devices
+   - Verify keyboard/focus flows and large-text accessibility.
+   - Test on iOS/Android browsers for PWA install and offline behavior.
+
+7. More refined app state consistency
+   - Reduce the number of ad hoc localStorage checks and duplicate onboarding logic.
+   - Consider a single settings store for defaults and UI preferences.
+
+---
+
+## Roadmap
+
+- [x] Exercise library
+- [x] Routine builder
+- [x] Workout logging
+- [x] Workout history
+- [x] Personal records
+- [x] Progress tracking
+- [x] Body-weight tracking
+- [x] Streak tracking
+- [x] Rest timer
+- [x] Offline support
+- [x] PWA support
+- [x] JSON backup/import
+- [x] Google Drive backup
+- [ ] Progressive overload recommendations
+- [ ] Advanced health/integration features
+
+---
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
 
 ---
 
