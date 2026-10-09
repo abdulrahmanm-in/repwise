@@ -81,7 +81,7 @@ export default function WorkoutsTab() {
 
   const customExercisesCount = exercises.filter((e) => Boolean(e.isCustom)).length;
   const isRoutineLimitReached = routines.length >= 10;
-  const isCustomExerciseLimitReached = customExercisesCount >= 20;
+  const isCustomExerciseLimitReached = customExercisesCount >= 50;
 
   const handleOpenCreateRoutine = () => {
     if (isRoutineLimitReached) {
@@ -429,13 +429,13 @@ export default function WorkoutsTab() {
           <div className="flex justify-between items-center">
             <span className="text-xs uppercase text-zinc-400 font-semibold tracking-wider">
               {libraryMuscle === "Custom"
-                ? `Custom Exercises (${customExercisesCount}/20)`
+                ? `Custom Exercises (${customExercisesCount}/50)`
                 : `Exercise Catalog (${filteredLibrary.length})`}
             </span>
             <button
               onClick={() => {
                 if (isCustomExerciseLimitReached) {
-                  alert("Custom exercise limit reached (20/20). Please delete an existing custom exercise to add more.");
+                  alert("Custom exercise limit reached (50/50). Please delete an existing custom exercise to add more.");
                   return;
                 }
                 setShowCreateExerciseModal(true);
@@ -474,7 +474,7 @@ export default function WorkoutsTab() {
                     : "bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-200"
                 )}
               >
-                {m === "Custom" ? `Custom (${customExercisesCount}/20)` : m}
+                {m === "Custom" ? `Custom (${customExercisesCount}/50)` : m}
               </button>
             ))}
           </div>
