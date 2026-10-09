@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { db } from "@/db/database";
 import { Exercise, MuscleGroup, EquipmentType } from "@/types";
+import { generateCanonicalKey } from "@/lib/exerciseKey";
 
 interface ImportAIRoutineModalProps {
   isOpen: boolean;
@@ -202,6 +203,8 @@ export default function ImportAIRoutineModal({
 
   const promptText = `Now format all the routines we just planned into this exact JSON structure for Repwise. Return ONLY raw JSON inside a \`\`\`json block with no extra text or pleasantries.
 
+Guidelines:
+- Use standard, natural exercise names (e.g. "Incline Dumbbell Press", "Lat Pulldown", "Barbell Back Squat").
 - "targetMuscle" must be exactly one of: ["Chest", "Back", "Legs", "Shoulders", "Arms", "Core", "Full Body", "Cardio"]
 - "equipment" must be exactly one of: ["Barbell", "Dumbbell", "Cable", "Machine", "Bodyweight", "Kettlebell", "Smith Machine", "Other"]
 
@@ -217,7 +220,7 @@ export default function ImportAIRoutineModal({
         "targetReps": 10
       },
       {
-        "name": "Lateral Raises",
+        "name": "Dumbbell Lateral Raise",
         "targetMuscle": "Shoulders",
         "equipment": "Dumbbell",
         "targetSets": 3,
@@ -273,29 +276,38 @@ export default function ImportAIRoutineModal({
       );
       setExistingTitlesSet(existingTitles);
 
-      // Check Custom Exercise Cap (max 50)
+      // Check Custom Exercise Cap (max 50) using canonical keys
       const currentCustomExercises = await db.exercises.filter((ex) => Boolean(ex.isCustom)).toArray();
-      const exerciseNameMap = new Map(existingExercises.map((e) => [e.name.trim().toLowerCase(), e]));
+      const existingKeyMap = new Map<string, Exercise>();
+      for (const ex of existingExercises) {
+        existingKeyMap.set(
+          generateCanonicalKey(ex.name, ex.targetMuscle, ex.equipment),
+          ex
+        );
+      }
 
-      const newCustomToCreate = new Set<string>();
+      const newCustomKeysToCreate = new Set<string>();
       for (const r of routinesArray) {
         if (Array.isArray(r.exercises)) {
           for (const ex of r.exercises) {
-            const exName = (ex.name || "").trim().toLowerCase();
-            if (exName && !exerciseNameMap.has(exName) && !newCustomToCreate.has(exName)) {
-              newCustomToCreate.add(exName);
+            const rawName = (ex.name || "").trim();
+            const muscle = normalizeMuscle(ex.targetMuscle, rawName);
+            const equip = normalizeEquipment(ex.equipment, rawName);
+            const key = generateCanonicalKey(rawName, muscle, equip);
+
+            if (!existingKeyMap.has(key) && !newCustomKeysToCreate.has(key)) {
+              newCustomKeysToCreate.add(key);
             }
           }
         }
       }
 
-      // ONLY throw if this import is introducing NEW custom exercises beyond the 50 limit
       if (
-        newCustomToCreate.size > 0 &&
-        currentCustomExercises.length + newCustomToCreate.size > 50
+        newCustomKeysToCreate.size > 0 &&
+        currentCustomExercises.length + newCustomKeysToCreate.size > 50
       ) {
         throw new Error(
-          `Custom exercise limit exceeded (${currentCustomExercises.length}/50). This import would add ${newCustomToCreate.size} new custom exercise(s), which exceeds the 50-exercise maximum.`
+          `Custom exercise limit exceeded (${currentCustomExercises.length}/50). This import would add ${newCustomKeysToCreate.size} new custom exercise(s), which exceeds the 50-exercise maximum.`
         );
       }
 
@@ -371,28 +383,36 @@ export default function ImportAIRoutineModal({
         );
       }
 
-      // Verify Custom Exercise Limit (max 50)
+      // Verify Custom Exercise Limit (max 50) using canonical keys
       const currentCustomExercises = await db.exercises.filter((ex) => Boolean(ex.isCustom)).toArray();
-      const exerciseMap = new Map(
-        existingExercises.map((e) => [e.name.trim().toLowerCase(), e])
-      );
+      const activeKeyMap = new Map<string, Exercise>();
+      for (const ex of existingExercises) {
+        activeKeyMap.set(
+          generateCanonicalKey(ex.name, ex.targetMuscle, ex.equipment),
+          ex
+        );
+      }
 
-      const brandNewExercises = new Set<string>();
+      const brandNewKeys = new Set<string>();
       for (const r of routinesToSave) {
         for (const ex of r.exercises) {
-          const exName = (ex.name || "").trim().toLowerCase();
-          if (exName && !exerciseMap.has(exName) && !brandNewExercises.has(exName)) {
-            brandNewExercises.add(exName);
+          const rawName = (ex.name || "").trim();
+          const muscle = normalizeMuscle(ex.targetMuscle, rawName);
+          const equip = normalizeEquipment(ex.equipment, rawName);
+          const key = generateCanonicalKey(rawName, muscle, equip);
+
+          if (!activeKeyMap.has(key) && !brandNewKeys.has(key)) {
+            brandNewKeys.add(key);
           }
         }
       }
 
       if (
-        brandNewExercises.size > 0 &&
-        currentCustomExercises.length + brandNewExercises.size > 50
+        brandNewKeys.size > 0 &&
+        currentCustomExercises.length + brandNewKeys.size > 50
       ) {
         throw new Error(
-          `Custom exercise limit reached (${currentCustomExercises.length}/50). Adding ${brandNewExercises.size} new exercise(s) exceeds the maximum of 50.`
+          `Custom exercise limit reached (${currentCustomExercises.length}/50). Adding ${brandNewKeys.size} new exercise(s) exceeds the maximum of 50.`
         );
       }
 
@@ -444,21 +464,25 @@ export default function ImportAIRoutineModal({
 
         for (let i = 0; i < r.exercises.length; i++) {
           const exData = r.exercises[i];
-          const exName = (exData.name || "Custom Exercise").trim();
-          let exercise = exerciseMap.get(exName.toLowerCase());
+          const rawName = (exData.name || "Exercise").trim();
+          const targetMuscle = normalizeMuscle(exData.targetMuscle, rawName);
+          const equipment = normalizeEquipment(exData.equipment, rawName);
+          const key = generateCanonicalKey(rawName, targetMuscle, equipment);
+
+          let exercise = activeKeyMap.get(key);
 
           if (!exercise) {
-            const newExId = `ex_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+            const newExId = `custom_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
             exercise = {
               id: newExId,
-              name: exName,
-              targetMuscle: normalizeMuscle(exData.targetMuscle, exName),
-              equipment: normalizeEquipment(exData.equipment, exName),
+              name: rawName, // Preserves natural name in UI
+              targetMuscle,
+              equipment,
               isCustom: true,
               isArchived: false,
             };
             await db.exercises.add(exercise);
-            exerciseMap.set(exName.toLowerCase(), exercise);
+            activeKeyMap.set(key, exercise);
           }
 
           await db.routineItems.add({

@@ -6,6 +6,7 @@ import { X, Plus } from "lucide-react";
 import { db } from "@/db/database";
 import { MuscleGroup, EquipmentType, Exercise } from "@/types";
 import { triggerAutoSync } from "@/lib/driveSync";
+import { generateCanonicalKey } from "@/lib/exerciseKey";
 
 interface CreateExerciseModalProps {
   isOpen: boolean;
@@ -50,14 +51,34 @@ export default function CreateExerciseModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) {
+    const trimmedName = name.trim();
+    if (!trimmedName) {
       setError("Exercise name is required.");
+      return;
+    }
+
+    const allExercises = await db.exercises.toArray();
+    const customCount = allExercises.filter((ex) => Boolean(ex.isCustom)).length;
+
+    if (customCount >= 50) {
+      setError("Custom exercise limit reached (maximum 50). Delete an existing custom exercise first.");
+      return;
+    }
+
+    const targetKey = generateCanonicalKey(trimmedName, targetMuscle, equipment);
+    const duplicate = allExercises.find((ex) => {
+      const existingKey = generateCanonicalKey(ex.name, ex.targetMuscle, ex.equipment);
+      return existingKey === targetKey;
+    });
+
+    if (duplicate) {
+      setError(`"${duplicate.name}" already exists in your library for ${equipment} (${targetMuscle}).`);
       return;
     }
 
     const newExercise: Exercise = {
       id: `custom_${Date.now()}`,
-      name: name.trim(),
+      name: trimmedName,
       targetMuscle,
       equipment,
       instructions: instructions.trim() || undefined,
