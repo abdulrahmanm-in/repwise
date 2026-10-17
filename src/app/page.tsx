@@ -46,10 +46,16 @@ export default function Home() {
   const [userProfile, setUserProfile] = useState<GoogleUserProfile | null>(null);
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [showStartModal, setShowStartModal] = useState(false);
+  const [pendingWorkoutStart, setPendingWorkoutStart] = useState<
+    | { type: "freestyle" }
+    | { type: "routine"; routine: Routine }
+    | null
+  >(null);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const workouts = useLiveQuery(() => db.workouts.toArray(), []) || [];
   const routines = useLiveQuery(() => db.routines.toArray(), []) || [];
+  const hasActiveWorkout = workouts.some((workout) => !workout.isCompleted);
   const latestWeight = useLiveQuery(
     () => db.bodyWeights.orderBy("recordedAt").reverse().first(),
     []
@@ -135,7 +141,12 @@ export default function Home() {
     }
   };
 
-  const handleLaunchFreestyleWorkout = async () => {
+  const handleLaunchFreestyleWorkout = async (skipActiveCheck = false) => {
+    if (!skipActiveCheck && hasActiveWorkout) {
+      setPendingWorkoutStart({ type: "freestyle" });
+      return;
+    }
+
     await clearIncompleteWorkouts();
 
     const dateFormatted = new Date().toLocaleDateString(undefined, {
@@ -154,10 +165,16 @@ export default function Home() {
     });
 
     setShowStartModal(false);
+    setPendingWorkoutStart(null);
     router.push("/workouts/active");
   };
 
-  const handleLaunchRoutine = async (routine: Routine) => {
+  const handleLaunchRoutine = async (routine: Routine, skipActiveCheck = false) => {
+    if (!skipActiveCheck && hasActiveWorkout) {
+      setPendingWorkoutStart({ type: "routine", routine });
+      return;
+    }
+
     await clearIncompleteWorkouts();
 
     const routineItems = await db.routineItems
@@ -223,6 +240,23 @@ export default function Home() {
     }
 
     setShowStartModal(false);
+    setPendingWorkoutStart(null);
+    router.push("/workouts/active");
+  };
+
+  const confirmStartNewWorkout = async () => {
+    if (!pendingWorkoutStart) return;
+
+    if (pendingWorkoutStart.type === "freestyle") {
+      await handleLaunchFreestyleWorkout(true);
+      return;
+    }
+
+    await handleLaunchRoutine(pendingWorkoutStart.routine, true);
+  };
+
+  const handleResumeActiveWorkout = () => {
+    setPendingWorkoutStart(null);
     router.push("/workouts/active");
   };
 
@@ -495,13 +529,17 @@ export default function Home() {
 
       {/* Start Workout Selection Modal */}
       {showStartModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end sm:justify-center sm:items-center p-0 sm:p-4">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-t-2xl sm:rounded-2xl p-5 w-full max-w-md max-h-[85vh] flex flex-col space-y-4">
-            <div className="flex justify-between items-center pb-2 border-b border-zinc-800">
-              <h2 className="text-base font-bold text-white">Choose Workout Type</h2>
+        <div className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-sm flex items-end justify-center p-0 select-none">
+          <div className="absolute inset-0" onClick={() => setShowStartModal(false)} />
+
+          <div className="relative z-10 w-full max-w-md bg-zinc-900 border-t border-zinc-800 rounded-t-3xl p-5 pb-[calc(1rem+env(safe-area-inset-bottom))] max-h-[80vh] flex flex-col shadow-2xl mb-[4.5rem]">
+            <div className="w-10 h-1 bg-zinc-700 rounded-full mx-auto mb-3 shrink-0" />
+
+            <div className="flex justify-between items-center pb-3 border-b border-zinc-800 shrink-0">
+              <h2 className="text-base font-bold text-white">Choose Workout Routine</h2>
               <button
                 onClick={() => setShowStartModal(false)}
-                className="text-zinc-400 hover:text-white p-1"
+                className="text-zinc-400 hover:text-white p-1 rounded-lg"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -509,8 +547,14 @@ export default function Home() {
 
             {/* Option 1: Freestyle */}
             <button
-              onClick={handleLaunchFreestyleWorkout}
-              className="w-full flex items-center justify-between p-3.5 bg-zinc-950 border border-zinc-800 hover:border-zinc-700 rounded-xl text-left transition-all group"
+              onClick={() => {
+                if (hasActiveWorkout) {
+                  setPendingWorkoutStart({ type: "freestyle" });
+                  return;
+                }
+                handleLaunchFreestyleWorkout();
+              }}
+              className="w-full flex items-center justify-between p-3.5 bg-zinc-950 border border-zinc-800 hover:border-zinc-700 rounded-2xl text-left transition-all group"
             >
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-lg bg-zinc-800 flex items-center justify-center text-white">
@@ -527,8 +571,8 @@ export default function Home() {
             </button>
 
             {/* Option 2: Saved Planned Routines */}
-            <div className="space-y-2 flex-1 overflow-y-auto">
-              <span className="text-xs uppercase font-bold text-zinc-400 tracking-wider">
+            <div className="space-y-2 flex-1 overflow-y-auto pt-2">
+              <span className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider">
                 Or Pick a Planned Routine ({routines.length})
               </span>
 
@@ -540,8 +584,14 @@ export default function Home() {
                 routines.map((routine) => (
                   <button
                     key={routine.id}
-                    onClick={() => handleLaunchRoutine(routine)}
-                    className="w-full flex items-center justify-between p-3 bg-zinc-950 border border-zinc-800 hover:border-zinc-700 rounded-xl text-left transition-all group"
+                    onClick={() => {
+                      if (hasActiveWorkout) {
+                        setPendingWorkoutStart({ type: "routine", routine });
+                        return;
+                      }
+                      handleLaunchRoutine(routine);
+                    }}
+                    className="w-full flex items-center justify-between p-3 bg-zinc-950 border border-zinc-800 hover:border-zinc-700 rounded-2xl text-left transition-all group"
                   >
                     <div className="flex items-center gap-3">
                       <div className="w-9 h-9 rounded-lg bg-zinc-800/80 flex items-center justify-center text-zinc-300">
@@ -558,6 +608,38 @@ export default function Home() {
                   </button>
                 ))
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingWorkoutStart && (
+        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/60 backdrop-blur-[2px] p-4">
+          <div className="w-full max-w-sm rounded-2xl border border-zinc-700 bg-zinc-950 p-5 shadow-2xl">
+            <h3 className="text-base font-bold text-white">Active workout in progress</h3>
+            <p className="mt-2 text-xs text-zinc-400">
+              You already have an unfinished workout session. Choose what to do next.
+            </p>
+
+            <div className="mt-4 space-y-2">
+              <button
+                onClick={handleResumeActiveWorkout}
+                className="w-full rounded-xl bg-white text-black px-3 py-2.5 text-xs font-bold"
+              >
+                Resume Active Workout
+              </button>
+              <button
+                onClick={confirmStartNewWorkout}
+                className="w-full rounded-xl bg-rose-600 text-white px-3 py-2.5 text-xs font-bold"
+              >
+                Discard Current & Start Routine
+              </button>
+              <button
+                onClick={() => setPendingWorkoutStart(null)}
+                className="w-full rounded-xl bg-zinc-800 border border-zinc-700 px-3 py-2.5 text-xs font-semibold text-zinc-200"
+              >
+                Cancel
+              </button>
             </div>
           </div>
         </div>

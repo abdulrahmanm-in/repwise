@@ -3,6 +3,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import Navigation from "@/components/Navigation";
 import ActiveSessionBar from "@/components/ActiveSessionBar";
+import DesktopNotice from "@/components/DesktopNotice";
 
 export const metadata: Metadata = {
   title: "Repwise | Local-First Workout Tracker",
@@ -35,13 +36,19 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="dark bg-black text-white">
-      <head>
-        <script src="https://accounts.google.com/gsi/client" async defer></script>
-      </head>
-      <body className="min-h-screen pb-20 select-none antialiased">
-        <main className="max-w-md mx-auto px-4 pt-4">{children}</main>
-        <ActiveSessionBar />
-        <Navigation />
+      <body className="bg-zinc-950 text-white min-h-screen flex justify-center selection:bg-zinc-800 antialiased select-none">
+        {/* Desktop informative banner */}
+        <DesktopNotice />
+
+        {/* Constrained Mobile Frame */}
+        <div className="w-full max-w-md min-h-screen bg-black relative flex flex-col md:border-x md:border-zinc-900 shadow-2xl">
+          <main className="flex-1 px-4 pt-4 pb-28">
+            {children}
+          </main>
+
+          <ActiveSessionBar />
+          <Navigation />
+        </div>
       </body>
     </html>
   );

@@ -100,7 +100,7 @@ export default function CreateExerciseModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end p-0 sm:p-4 sm:justify-center sm:items-center">
+    <div className="fixed inset-0 z-[130] bg-black/80 backdrop-blur-sm flex flex-col justify-end p-0 sm:p-4 sm:justify-center sm:items-center">
       <div className="bg-zinc-900 border border-zinc-800 rounded-t-2xl sm:rounded-2xl p-5 w-full max-w-md max-h-[90vh] overflow-y-auto animate-in fade-in slide-in-from-bottom-4">
         <div className="flex justify-between items-center pb-3 border-b border-zinc-800">
           <h2 className="text-base font-bold text-white">Create Custom Exercise</h2>
