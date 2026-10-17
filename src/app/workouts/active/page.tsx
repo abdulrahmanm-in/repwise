@@ -5,7 +5,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "@/db/database";
 import { WorkoutExercise, WorkoutSet, Exercise, Workout, RoutineItem, BodyWeight } from "@/types";
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Plus,
   CheckCheck,
@@ -15,6 +15,9 @@ import {
   BookmarkPlus,
   RefreshCw,
   Scale,
+  ChevronUp,
+  ChevronDown,
+  AlertCircle,
 } from "lucide-react";
 import SetRow from "@/components/SetRow";
 import RestTimerModal from "@/components/RestTimerModal";
@@ -25,35 +28,43 @@ import { pushLatestToDrive, triggerAutoSync } from "@/lib/driveSync";
 
 export default function ActiveWorkoutView() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const queryWorkoutId = searchParams.get("workoutId");
+  const fromSource = searchParams.get("from");
 
-  const activeWorkout = useLiveQuery<Workout | undefined>(
-    () => db.workouts.filter((w) => !w.isCompleted).first(),
-    []
+  // Load target workout: either specific history ID or first active incomplete workout
+  const workout = useLiveQuery<Workout | undefined>(
+    () =>
+      queryWorkoutId
+        ? db.workouts.get(queryWorkoutId)
+        : db.workouts.filter((w) => !w.isCompleted).first(),
+    [queryWorkoutId]
   );
+
+  const isEditingPastSession = Boolean(workout?.isCompleted);
 
   const workoutExercises = useLiveQuery<WorkoutExercise[]>(
     () =>
-      activeWorkout
+      workout
         ? db.workoutExercises
             .where("workoutId")
-            .equals(activeWorkout.id)
+            .equals(workout.id)
             .sortBy("orderIndex")
         : Promise.resolve([]),
-    [activeWorkout]
+    [workout?.id]
   ) || [];
 
   const sets = useLiveQuery<WorkoutSet[]>(
     () =>
-      activeWorkout
-        ? db.sets.where("workoutId").equals(activeWorkout.id).toArray()
+      workout
+        ? db.sets.where("workoutId").equals(workout.id).toArray()
         : Promise.resolve([]),
-    [activeWorkout]
+    [workout?.id]
   ) || [];
 
   const exercises = useLiveQuery<Exercise[]>(() => db.exercises.toArray(), []) || [];
   const exerciseMap = new Map(exercises.map((e) => [e.id, e]));
 
-  // Latest body weight lookup for pre-filling
   const latestRecordedWeight = useLiveQuery<BodyWeight | undefined>(
     () => db.bodyWeights.orderBy("recordedAt").reverse().first(),
     []
@@ -62,13 +73,16 @@ export default function ActiveWorkoutView() {
   const [sessionBodyWeight, setSessionBodyWeight] = useState<string>("");
   const [hasEnteredWeight, setHasEnteredWeight] = useState(false);
 
+  // Custom UI Dialog replacing browser alert/confirm
+  const [showTemplateSyncDialog, setShowTemplateSyncDialog] = useState(false);
+  const [showDiscardConfirmDialog, setShowDiscardConfirmDialog] = useState(false);
+
   useEffect(() => {
     if (latestRecordedWeight && !hasEnteredWeight) {
       setSessionBodyWeight(String(latestRecordedWeight.weightKg));
     }
   }, [latestRecordedWeight, hasEnteredWeight]);
 
-  // Ghost Values map
   const previousPerformanceMap = useLiveQuery(async () => {
     const map = new Map<string, WorkoutSet[]>();
     const completedWorkouts = await db.workouts
@@ -79,6 +93,7 @@ export default function ActiveWorkoutView() {
 
     for (const ex of exercises) {
       for (const cw of completedWorkouts) {
+        if (cw.id === workout?.id) continue;
         const foundSets = await db.sets
           .where("workoutId")
           .equals(cw.id)
@@ -92,18 +107,18 @@ export default function ActiveWorkoutView() {
       }
     }
     return map;
-  }, [exercises]);
+  }, [exercises, workout?.id]);
 
   const originalRoutineItems = useLiveQuery<RoutineItem[]>(async () => {
-    if (!activeWorkout?.routineId) return [];
+    if (!workout?.routineId) return [];
     return db.routineItems
       .where("routineId")
-      .equals(activeWorkout.routineId)
+      .equals(workout.routineId)
       .sortBy("orderIndex");
-  }, [activeWorkout?.routineId]) || [];
+  }, [workout?.routineId]) || [];
 
   const isRoutineModified = (() => {
-    if (!activeWorkout?.routineId || originalRoutineItems.length === 0) return false;
+    if (!workout?.routineId || originalRoutineItems.length === 0) return false;
     if (workoutExercises.length !== originalRoutineItems.length) return true;
 
     for (let i = 0; i < workoutExercises.length; i++) {
@@ -129,46 +144,47 @@ export default function ActiveWorkoutView() {
     addThirtySeconds,
   } = useRestTimer();
 
-  if (!activeWorkout) {
+  if (!workout) {
     return (
       <div className="text-center py-16 space-y-4">
-        <p className="text-sm text-zinc-400">No active workout session found.</p>
+        <p className="text-sm text-zinc-400">No workout session found.</p>
         <button
-          onClick={() => router.push("/")}
+          onClick={() => router.push(fromSource === "history" ? "/workouts?tab=history" : "/")}
           className="bg-white text-black font-bold px-4 py-2 rounded-xl text-sm"
         >
-          Go to Dashboard
+          {fromSource === "history" ? "Back to History" : "Go to Dashboard"}
         </button>
       </div>
     );
   }
 
-  const currentIsoDate = new Date(activeWorkout.startTime)
-    .toISOString()
-    .split("T")[0];
+  const currentIsoDate = new Date(workout.startTime).toISOString().split("T")[0];
 
   const handleDateChange = async (dateStr: string) => {
     if (!dateStr) return;
     const [year, month, day] = dateStr.split("-").map(Number);
     const updatedDate = new Date(year, month - 1, day, 12, 0, 0);
 
-    await db.workouts.update(activeWorkout.id, {
+    await db.workouts.update(workout.id, {
       startTime: updatedDate.getTime(),
     });
     triggerAutoSync();
   };
 
-  const handleDiscardWorkout = async () => {
-    const shouldDiscard = confirm(
-      "Are you sure you want to discard this workout session? All logged data in this session will be deleted."
-    );
-    if (!shouldDiscard) return;
+  const handleBackNavigation = () => {
+    if (fromSource === "history") {
+      router.push("/workouts?tab=history");
+    } else {
+      router.back();
+    }
+  };
 
-    await db.workouts.delete(activeWorkout.id);
-    await db.workoutExercises.where("workoutId").equals(activeWorkout.id).delete();
-    await db.sets.where("workoutId").equals(activeWorkout.id).delete();
-
-    router.push("/");
+  const handleDiscardConfirmed = async () => {
+    await db.workouts.delete(workout.id);
+    await db.workoutExercises.where("workoutId").equals(workout.id).delete();
+    await db.sets.where("workoutId").equals(workout.id).delete();
+    triggerAutoSync();
+    handleBackNavigation();
   };
 
   const syncWorkoutToRoutineTemplate = async (routineId: string) => {
@@ -193,78 +209,97 @@ export default function ActiveWorkoutView() {
     }
   };
 
-  const handleFinishWorkout = async () => {
-    if (activeWorkout.routineId && isRoutineModified) {
-      const shouldUpdate = confirm(
-        "You modified exercises or sets in this planned routine. Would you like to update the saved routine template as well?"
-      );
-      if (shouldUpdate) {
-        await syncWorkoutToRoutineTemplate(activeWorkout.routineId);
-      }
+  const finalizeFinish = async (updateTemplate: boolean) => {
+    if (updateTemplate && workout.routineId) {
+      await syncWorkoutToRoutineTemplate(workout.routineId);
     }
 
-    // Save updated body weight if entered
     const parsedWeight = parseFloat(sessionBodyWeight);
     if (!isNaN(parsedWeight) && parsedWeight > 0) {
-      if (latestRecordedWeight && latestRecordedWeight.weightKg !== parsedWeight) {
-        await db.bodyWeights.add({
-          id: `bw_${Date.now()}`,
-          recordedAt: Date.now(),
-          weightKg: parsedWeight,
-        });
-      } else if (!latestRecordedWeight) {
-        await db.bodyWeights.add({
-          id: `bw_${Date.now()}`,
-          recordedAt: Date.now(),
-          weightKg: parsedWeight,
-        });
-      }
+      await db.bodyWeights.add({
+        id: `bw_${Date.now()}`,
+        recordedAt: Date.now(),
+        weightKg: parsedWeight,
+      });
     }
 
     const totalVolume = calculateWorkoutVolume(sets);
-    const baseDate = new Date(activeWorkout.startTime);
-    const finishTimestamp = new Date(
-      baseDate.getFullYear(),
-      baseDate.getMonth(),
-      baseDate.getDate(),
-      new Date().getHours(),
-      new Date().getMinutes()
-    ).getTime();
+    const baseDate = new Date(workout.startTime);
+    const finishTimestamp =
+      workout.endTime ||
+      new Date(
+        baseDate.getFullYear(),
+        baseDate.getMonth(),
+        baseDate.getDate(),
+        new Date().getHours(),
+        new Date().getMinutes()
+      ).getTime();
 
-    await db.workouts.update(activeWorkout.id, {
+    await db.workouts.update(workout.id, {
       endTime: finishTimestamp,
       totalVolumeKg: totalVolume,
       isCompleted: true,
     });
 
     pushLatestToDrive().catch(() => {});
-    router.push("/workouts");
+    setShowTemplateSyncDialog(false);
+
+    if (fromSource === "history") {
+      router.push("/workouts?tab=history");
+    } else {
+      router.push("/workouts");
+    }
   };
 
-  const handleSaveAsRoutine = async () => {
-    if (workoutExercises.length === 0) {
-      alert("Add at least one exercise before saving as a routine.");
-      return;
+  const handleInitiateFinish = () => {
+    if (!isEditingPastSession && workout.routineId && isRoutineModified) {
+      setShowTemplateSyncDialog(true);
+    } else {
+      finalizeFinish(false);
     }
+  };
 
-    const title = prompt("Save as Routine Name:", activeWorkout.title);
-    if (!title?.trim()) return;
+  const handleMoveExercise = async (index: number, direction: "up" | "down") => {
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= workoutExercises.length) return;
 
-    const newRoutineId = `rt_${Date.now()}`;
-    await db.routines.add({
-      id: newRoutineId,
-      title: title.trim(),
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+    const current = workoutExercises[index];
+    const target = workoutExercises[targetIndex];
+
+    await db.workoutExercises.update(current.id, { orderIndex: targetIndex + 1 });
+    await db.workoutExercises.update(target.id, { orderIndex: index + 1 });
+    triggerAutoSync();
+  };
+
+  const handleDeleteSet = async (setId: string, workoutExerciseId: string) => {
+    await db.sets.delete(setId);
+    const remainingSets = await db.sets
+      .where("workoutExerciseId")
+      .equals(workoutExerciseId)
+      .sortBy("setIndex");
+
+    for (let i = 0; i < remainingSets.length; i++) {
+      await db.sets.update(remainingSets[i].id, { setIndex: i + 1 });
+    }
+    triggerAutoSync();
+  };
+
+  const handleAddSet = async (we: WorkoutExercise) => {
+    const targetSets = sets.filter((s) => s.workoutExerciseId === we.id);
+    const lastSet = targetSets[targetSets.length - 1];
+
+    await db.sets.add({
+      id: `s_${Date.now()}_${targetSets.length + 1}`,
+      workoutExerciseId: we.id,
+      workoutId: workout.id,
+      exerciseId: we.exerciseId,
+      setIndex: targetSets.length + 1,
+      setType: "normal",
+      weightKg: lastSet ? lastSet.weightKg : 0,
+      reps: lastSet ? lastSet.reps : 10,
+      isCompleted: isEditingPastSession ? true : false,
     });
 
-    await syncWorkoutToRoutineTemplate(newRoutineId);
-
-    await db.workouts.update(activeWorkout.id, {
-      routineId: newRoutineId,
-    });
-
-    alert(`Saved "${title.trim()}" to Routines!`);
     triggerAutoSync();
   };
 
@@ -276,7 +311,7 @@ export default function ActiveWorkoutView() {
     const weId = `we_${Date.now()}_${exerciseId}`;
     await db.workoutExercises.add({
       id: weId,
-      workoutId: activeWorkout.id,
+      workoutId: workout.id,
       exerciseId: exerciseId,
       orderIndex: workoutExercises.length + 1,
     });
@@ -284,13 +319,13 @@ export default function ActiveWorkoutView() {
     await db.sets.add({
       id: `s_${Date.now()}_1`,
       workoutExerciseId: weId,
-      workoutId: activeWorkout.id,
+      workoutId: workout.id,
       exerciseId: exerciseId,
       setIndex: 1,
       setType: "normal",
       weightKg: prefillWeight,
       reps: prefillReps,
-      isCompleted: false,
+      isCompleted: isEditingPastSession ? true : false,
     });
 
     setShowExerciseSelector(false);
@@ -306,7 +341,7 @@ export default function ActiveWorkoutView() {
       const weId = `we_${Date.now()}_${id}`;
       await db.workoutExercises.add({
         id: weId,
-        workoutId: activeWorkout.id,
+        workoutId: workout.id,
         exerciseId: id,
         orderIndex: workoutExercises.length + 1,
       });
@@ -314,13 +349,13 @@ export default function ActiveWorkoutView() {
       await db.sets.add({
         id: `s_${Date.now()}_${id}_1`,
         workoutExerciseId: weId,
-        workoutId: activeWorkout.id,
+        workoutId: workout.id,
         exerciseId: id,
         setIndex: 1,
         setType: "normal",
         weightKg: prefillWeight,
         reps: prefillReps,
-        isCompleted: false,
+        isCompleted: isEditingPastSession ? true : false,
       });
     }
 
@@ -328,39 +363,20 @@ export default function ActiveWorkoutView() {
     triggerAutoSync();
   };
 
-  const handleAddSet = async (we: WorkoutExercise) => {
-    const targetSets = sets.filter((s) => s.workoutExerciseId === we.id);
-    const lastSet = targetSets[targetSets.length - 1];
-
-    await db.sets.add({
-      id: `s_${Date.now()}_${targetSets.length + 1}`,
-      workoutExerciseId: we.id,
-      workoutId: activeWorkout.id,
-      exerciseId: we.exerciseId,
-      setIndex: targetSets.length + 1,
-      setType: "normal",
-      weightKg: lastSet ? lastSet.weightKg : 0,
-      reps: lastSet ? lastSet.reps : 0,
-      isCompleted: false,
-    });
-
-    triggerAutoSync();
-  };
-
   return (
     <div className="space-y-4 pb-28">
       {/* Session Top Bar */}
       <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
-        <button onClick={() => router.back()} className="text-zinc-400 hover:text-white">
+        <button onClick={handleBackNavigation} className="text-zinc-400 hover:text-white">
           <ArrowLeft className="w-5 h-5" />
         </button>
 
         <div className="flex-1 mx-3">
           <input
             type="text"
-            value={activeWorkout.title}
+            value={workout.title}
             onChange={(e) => {
-              db.workouts.update(activeWorkout.id, { title: e.target.value });
+              db.workouts.update(workout.id, { title: e.target.value });
             }}
             placeholder="Workout Title"
             className="w-full bg-transparent font-bold text-sm text-white outline-none border-b border-transparent focus:border-zinc-500 pb-0.5"
@@ -369,24 +385,23 @@ export default function ActiveWorkoutView() {
 
         <div className="flex items-center gap-1.5">
           <button
-            onClick={handleDiscardWorkout}
-            title="Discard Session"
+            onClick={() => setShowDiscardConfirmDialog(true)}
+            title="Delete Session"
             className="bg-zinc-900 border border-zinc-800 hover:border-rose-900 hover:text-rose-400 text-zinc-400 font-semibold text-xs px-2.5 py-1.5 rounded-lg flex items-center gap-1 transition-colors"
           >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
           <button
-            onClick={handleFinishWorkout}
+            onClick={handleInitiateFinish}
             className="bg-white text-black hover:bg-zinc-200 font-bold text-xs px-3 py-1.5 rounded-lg flex items-center gap-1 shadow-sm transition-all"
           >
-            <CheckCheck className="w-4 h-4" /> Finish
+            <CheckCheck className="w-4 h-4" /> {isEditingPastSession ? "Save" : "Finish"}
           </button>
         </div>
       </div>
 
-      {/* Date Picker, Body Weight, and Context Actions */}
+      {/* Date Picker, Body Weight */}
       <div className="grid grid-cols-2 gap-2">
-        {/* Date Selector */}
         <div className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 p-2.5 rounded-xl text-xs text-zinc-300">
           <Calendar className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
           <input
@@ -397,7 +412,6 @@ export default function ActiveWorkoutView() {
           />
         </div>
 
-        {/* Body Weight Logger */}
         <div className="flex items-center gap-1.5 bg-zinc-900 border border-zinc-800 p-2.5 rounded-xl text-xs text-zinc-300">
           <Scale className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
           <input
@@ -415,30 +429,9 @@ export default function ActiveWorkoutView() {
         </div>
       </div>
 
-      {/* Routine Sync Bar */}
-      {!activeWorkout.routineId ? (
-        <button
-          onClick={handleSaveAsRoutine}
-          className="w-full text-xs bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-200 p-2.5 rounded-xl flex items-center justify-center gap-1.5 font-medium transition-colors"
-        >
-          <BookmarkPlus className="w-3.5 h-3.5" /> Save Workout as New Routine
-        </button>
-      ) : isRoutineModified ? (
-        <button
-          onClick={async () => {
-            await syncWorkoutToRoutineTemplate(activeWorkout.routineId!);
-            alert("Routine template updated!");
-            triggerAutoSync();
-          }}
-          className="w-full text-xs bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 p-2.5 rounded-xl flex items-center justify-center gap-1.5 font-medium transition-colors"
-        >
-          <RefreshCw className="w-3.5 h-3.5" /> Update Original Routine Template
-        </button>
-      ) : null}
-
       {/* Exercises List */}
       <div className="space-y-4">
-        {workoutExercises.map((we) => {
+        {workoutExercises.map((we, exIdx) => {
           const exercise = exerciseMap.get(we.exerciseId);
           const exerciseSets = sets
             .filter((s) => s.workoutExerciseId === we.id)
@@ -452,14 +445,35 @@ export default function ActiveWorkoutView() {
               className="bg-zinc-950 border border-zinc-800 rounded-2xl p-3 space-y-3"
             >
               <div className="flex justify-between items-center px-1">
-                <div>
-                  <h3 className="font-semibold text-white text-sm">
-                    {exercise?.name || "Exercise"}
-                  </h3>
-                  <span className="text-[10px] text-zinc-500">
-                    {exercise?.targetMuscle} • {exercise?.equipment}
-                  </span>
+                <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-0.5">
+                    <button
+                      type="button"
+                      disabled={exIdx === 0}
+                      onClick={() => handleMoveExercise(exIdx, "up")}
+                      className="p-1 text-zinc-500 hover:text-white disabled:opacity-20 rounded"
+                    >
+                      <ChevronUp className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={exIdx === workoutExercises.length - 1}
+                      onClick={() => handleMoveExercise(exIdx, "down")}
+                      className="p-1 text-zinc-500 hover:text-white disabled:opacity-20 rounded"
+                    >
+                      <ChevronDown className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-white text-sm">
+                      {exercise?.name || "Exercise"}
+                    </h3>
+                    <span className="text-[10px] text-zinc-500">
+                      {exercise?.targetMuscle} • {exercise?.equipment}
+                    </span>
+                  </div>
                 </div>
+
                 <button
                   onClick={async () => {
                     await db.workoutExercises.delete(we.id);
@@ -495,6 +509,7 @@ export default function ActiveWorkoutView() {
                         await db.sets.update(s.id, fields);
                         triggerAutoSync();
                       }}
+                      onDelete={() => handleDeleteSet(s.id, we.id)}
                       onToggleComplete={async () => {
                         const updatedStatus = !s.isCompleted;
                         await db.sets.update(s.id, {
@@ -502,11 +517,10 @@ export default function ActiveWorkoutView() {
                           completedAt: updatedStatus ? Date.now() : undefined,
                         });
 
-                        // Only auto-trigger timer if rest timer is enabled
                         const timerPref = localStorage.getItem("repwise_rest_timer_enabled");
                         const isTimerEnabled = timerPref === null ? true : timerPref === "true";
 
-                        if (updatedStatus && isTimerEnabled) {
+                        if (updatedStatus && isTimerEnabled && !isEditingPastSession) {
                           startTimer(90);
                         }
                         triggerAutoSync(500);
@@ -527,7 +541,6 @@ export default function ActiveWorkoutView() {
         })}
       </div>
 
-      {/* Add Exercise Trigger Button */}
       <button
         onClick={() => setShowExerciseSelector(true)}
         className="w-full py-3 border border-dashed border-zinc-800 hover:border-zinc-500 rounded-xl text-xs font-semibold text-zinc-400 hover:text-white transition-colors flex items-center justify-center gap-1.5"
@@ -535,7 +548,65 @@ export default function ActiveWorkoutView() {
         <Plus className="w-4 h-4" /> Add Exercise
       </button>
 
-      {/* Shared Exercise Selector Modal */}
+      {/* Discard Session In-App Dialog */}
+      {showDiscardConfirmDialog && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 max-w-sm w-full space-y-3">
+            <h3 className="font-bold text-white text-sm">
+              {isEditingPastSession ? "Delete Workout History?" : "Discard Active Workout?"}
+            </h3>
+            <p className="text-xs text-zinc-400">
+              {isEditingPastSession
+                ? "This workout session will be completely deleted from your history."
+                : "All sets logged in this session will be permanently erased."}
+            </p>
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => setShowDiscardConfirmDialog(false)}
+                className="flex-1 py-2.5 bg-zinc-800 text-xs font-semibold text-zinc-300 rounded-xl"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDiscardConfirmed}
+                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-500 text-xs font-bold text-white rounded-xl"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Clean Template Sync Confirmation Sheet (Solves Point 4) */}
+      {showTemplateSyncDialog && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end">
+          <div className="bg-zinc-900 border-t border-zinc-800 rounded-t-2xl p-5 mb-16 space-y-3 shadow-2xl">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 text-amber-400 shrink-0" />
+              <h3 className="font-bold text-white text-sm">Save Routine Changes?</h3>
+            </div>
+            <p className="text-xs text-zinc-300">
+              You added or removed exercises from this planned routine. Would you like to update your saved routine template for next time?
+            </p>
+            <div className="space-y-2 pt-1">
+              <button
+                onClick={() => finalizeFinish(true)}
+                className="w-full py-2.5 bg-white text-black hover:bg-zinc-200 font-bold rounded-xl text-xs transition-colors"
+              >
+                Update Routine & Finish
+              </button>
+              <button
+                onClick={() => finalizeFinish(false)}
+                className="w-full py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold rounded-xl text-xs transition-colors"
+              >
+                Finish Workout Only
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <ExerciseSelectorModal
         isOpen={showExerciseSelector}
         onClose={() => setShowExerciseSelector(false)}
@@ -544,7 +615,6 @@ export default function ActiveWorkoutView() {
         onSelectMultiple={handleAddMultipleExercises}
       />
 
-      {/* Floating Rest Timer */}
       <RestTimerModal
         secondsRemaining={secondsRemaining}
         isRunning={isRunning}
