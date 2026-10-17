@@ -113,9 +113,32 @@ export function requestDriveAuth() {
 
   if (tokenClient) {
     tokenClient.requestAccessToken({ prompt: "" });
-  } else {
-    alert("Google Identity service is still loading. Please tap again in a moment.");
+    return;
   }
+
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const existingScript = document.querySelector<HTMLScriptElement>('script[src="https://accounts.google.com/gsi/client"]');
+  if (!existingScript) {
+    const googleScript = document.createElement("script");
+    googleScript.src = "https://accounts.google.com/gsi/client";
+    googleScript.async = true;
+    googleScript.defer = true;
+    googleScript.onload = () => {
+      if (window.google && window.google.accounts?.oauth2) {
+        initGoogleAuth(activeSuccessCallback || (() => {}));
+        if (tokenClient) {
+          tokenClient.requestAccessToken({ prompt: "" });
+        }
+      }
+    };
+    document.head.appendChild(googleScript);
+    return;
+  }
+
+  alert("Google Identity service is still loading. Please tap again in a moment.");
 }
 
 export function disconnectGoogleDrive() {
