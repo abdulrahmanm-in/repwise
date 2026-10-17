@@ -62,10 +62,17 @@ export default function ExerciseSelectorModal({
     onClose();
   };
 
+  const handleCreatedCustomExercise = (createdExercise: Exercise) => {
+    setSelectedIds([]);
+    onSelectSingle(createdExercise.id);
+    setShowCreateModal(false);
+    onClose();
+  };
+
   return (
     <>
       <div className="fixed inset-0 z-[60] bg-black/85 backdrop-blur-sm flex flex-col justify-end sm:justify-center sm:items-center p-0 sm:p-4 select-none">
-        <div className="bg-zinc-900 border border-zinc-800 rounded-t-2xl sm:rounded-2xl p-4 w-full sm:max-w-lg h-[88vh] flex flex-col relative pb-20 sm:pb-4">
+        <div className="bg-zinc-900 border border-zinc-800 rounded-t-2xl sm:rounded-2xl p-4 w-full sm:max-w-lg h-[84vh] flex flex-col relative mb-16 sm:mb-0">
           {/* Header */}
           <div className="flex justify-between items-center pb-3 border-b border-zinc-800 shrink-0">
             <h2 className="font-bold text-sm text-white">{title}</h2>
@@ -150,7 +157,6 @@ export default function ExerciseSelectorModal({
                         : "bg-zinc-950 border-zinc-800/90 hover:border-zinc-700"
                     )}
                   >
-                    {/* Left: Checkbox + Name */}
                     <div className="flex items-center gap-3">
                       <div
                         className={clsx(
@@ -178,7 +184,6 @@ export default function ExerciseSelectorModal({
                       </div>
                     </div>
 
-                    {/* Right: Quick Add Button */}
                     <button
                       type="button"
                       onClick={(ev) => {
@@ -197,9 +202,8 @@ export default function ExerciseSelectorModal({
             )}
           </div>
 
-          {/* Floating Multi-select Submit Bar */}
           {selectedIds.length > 0 && (
-            <div className="absolute left-4 right-4 bottom-20 sm:bottom-4 p-2 bg-zinc-900/95 backdrop-blur-md border border-zinc-700 rounded-2xl shadow-2xl">
+            <div className="absolute left-4 right-4 bottom-4 p-2 bg-zinc-900/95 backdrop-blur-md border border-zinc-700 rounded-2xl shadow-2xl">
               <button
                 type="button"
                 onClick={handleConfirmMultiple}
@@ -212,10 +216,10 @@ export default function ExerciseSelectorModal({
         </div>
       </div>
 
-      {/* Sub-modal to create custom exercise directly */}
       <CreateExerciseModal
         isOpen={showCreateModal}
         onClose={() => setShowCreateModal(false)}
+        onCreated={handleCreatedCustomExercise}
       />
     </>
   );

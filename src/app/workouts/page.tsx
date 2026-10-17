@@ -1,7 +1,8 @@
 // src/app/workouts/page.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "@/db/database";
 import { Routine, Exercise, MuscleGroup, WorkoutSet } from "@/types";
@@ -19,9 +20,7 @@ import {
   Sparkles,
   ChevronUp,
   ChevronDown,
-  AlertTriangle,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import clsx from "clsx";
 import CreateExerciseModal from "@/components/CreateExerciseModal";
 import ImportAIRoutineModal from "@/components/ImportAIRoutineModal";
@@ -46,33 +45,49 @@ const MUSCLE_GROUPS: (MuscleGroup | "All" | "Custom")[] = [
 
 export default function WorkoutsTab() {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<"routines" | "exercises" | "history">("routines");
+  const searchParams = useSearchParams();
+  const defaultTab = searchParams.get("tab") as "routines" | "exercises" | "history" | null;
+  
+  const [activeTab, setActiveTab] = useState<"routines" | "exercises" | "history">(
+    defaultTab || "routines"
+  );
 
-  // Routine Modal State
+  useEffect(() => {
+    if (defaultTab) {
+      setActiveTab(defaultTab);
+    }
+  }, [defaultTab]);
+
   const [isRoutineModalOpen, setIsRoutineModalOpen] = useState(false);
   const [editingRoutineId, setEditingRoutineId] = useState<string | null>(null);
   const [routineTitle, setRoutineTitle] = useState("");
   const [plannedItems, setPlannedItems] = useState<PlannedItem[]>([]);
 
-  // Exercise Picker Modal State
-  const [showExercisePicker, setShowExercisePicker] = useState(false);
+  // Routine safe deletion modal
+  const [routineToDelete, setRoutineToDelete] = useState<Routine | null>(null);
 
-  // Standalone Exercise Library Tab State
+  const [showExercisePicker, setShowExercisePicker] = useState(false);
   const [librarySearch, setLibrarySearch] = useState("");
   const [libraryMuscle, setLibraryMuscle] = useState<MuscleGroup | "All" | "Custom">("All");
   const [showCreateExerciseModal, setShowCreateExerciseModal] = useState(false);
-
-  // AI Import Routine Modal State
   const [showAIModal, setShowAIModal] = useState(false);
+  const [pendingRoutineStart, setPendingRoutineStart] = useState<Routine | null>(null);
 
-  // Active Workout Conflict State
-  const [pendingRoutineToStart, setPendingRoutineToStart] = useState<Routine | null>(null);
-  const [showActiveConflictModal, setShowActiveConflictModal] = useState(false);
+  const isWorkoutActive = (workout: { isCompleted?: boolean | number | null | undefined }) => {
+    const isCompleted = workout.isCompleted as boolean | number | null | undefined;
+    return isCompleted === false || isCompleted === 0 || !isCompleted;
+  };
 
+  const workouts = useLiveQuery(() => db.workouts.toArray(), []) || [];
   const routines = useLiveQuery(() => db.routines.toArray(), []) || [];
+  const hasActiveWorkout = workouts.some(isWorkoutActive);
   const history =
     useLiveQuery(
-      () => db.workouts.where("isCompleted").equals(1).reverse().sortBy("endTime"),
+      () =>
+        db.workouts
+          .filter((w) => Boolean(w.isCompleted))
+          .reverse()
+          .sortBy("endTime"),
       []
     ) || [];
 
@@ -82,6 +97,10 @@ export default function WorkoutsTab() {
   const customExercisesCount = exercises.filter((e) => Boolean(e.isCustom)).length;
   const isRoutineLimitReached = routines.length >= 10;
   const isCustomExerciseLimitReached = customExercisesCount >= 50;
+
+  const isActiveWorkoutPresent = async () => {
+    return !!(await db.workouts.filter((w) => isWorkoutActive(w)).first());
+  };
 
   const handleOpenCreateRoutine = () => {
     if (isRoutineLimitReached) {
@@ -195,19 +214,16 @@ export default function WorkoutsTab() {
     setPlannedItems([]);
   };
 
-  const initiateRoutineStart = async (routine: Routine) => {
-    const unfinished = await db.workouts.filter((w) => !w.isCompleted).toArray();
-    if (unfinished.length > 0) {
-      setPendingRoutineToStart(routine);
-      setShowActiveConflictModal(true);
-      return;
+  const executeStartRoutine = async (routine: Routine, skipActiveCheck = false) => {
+    if (!skipActiveCheck) {
+      const activeWorkout = await db.workouts.filter((w) => isWorkoutActive(w)).first();
+      if (activeWorkout) {
+        setPendingRoutineStart(routine);
+        return;
+      }
     }
 
-    await executeStartRoutine(routine);
-  };
-
-  const executeStartRoutine = async (routine: Routine) => {
-    const unfinished = await db.workouts.filter((w) => !w.isCompleted).toArray();
+    const unfinished = await db.workouts.filter((w) => isWorkoutActive(w)).toArray();
     for (const w of unfinished) {
       await db.workouts.delete(w.id);
       await db.workoutExercises.where("workoutId").equals(w.id).delete();
@@ -276,6 +292,29 @@ export default function WorkoutsTab() {
       }
     }
 
+    setPendingRoutineStart(null);
+    router.push("/workouts/active");
+  };
+
+  const handleRoutineStartClick = async (routine: Routine) => {
+    const activeWorkout = await db.workouts.filter((w) => isWorkoutActive(w)).first();
+    if (activeWorkout) {
+      setPendingRoutineStart(routine);
+      return;
+    }
+
+    await executeStartRoutine(routine, true);
+  };
+
+  const confirmPendingRoutineStart = async () => {
+    if (!pendingRoutineStart) return;
+    const routine = pendingRoutineStart;
+    setPendingRoutineStart(null);
+    await executeStartRoutine(routine, true);
+  };
+
+  const handleResumeActiveWorkout = () => {
+    setPendingRoutineStart(null);
     router.push("/workouts/active");
   };
 
@@ -396,21 +435,9 @@ export default function WorkoutsTab() {
 
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      if (confirm(`Delete routine "${routine.title}"?`)) {
-                        await db.routines.delete(routine.id);
-                        await db.routineItems.where("routineId").equals(routine.id).delete();
-                      }
-                    }}
-                    className="p-2 text-zinc-500 hover:text-rose-400 transition-colors"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                  <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      initiateRoutineStart(routine);
+                      handleRoutineStartClick(routine);
                     }}
                     className="bg-white text-black hover:bg-zinc-200 px-3.5 py-1.5 rounded-lg font-bold text-xs flex items-center gap-1.5 transition-all shadow-sm active:scale-95"
                   >
@@ -528,10 +555,14 @@ export default function WorkoutsTab() {
             history.map((item) => (
               <div
                 key={item.id}
-                className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex justify-between items-center"
+                onClick={() => router.push(`/workouts/active?workoutId=${item.id}&from=history`)}
+                className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex justify-between items-center hover:border-zinc-700 cursor-pointer transition-colors"
               >
                 <div>
-                  <h3 className="font-semibold text-sm text-white">{item.title}</h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-semibold text-sm text-white hover:underline">{item.title}</h3>
+                    <Pencil className="w-3 h-3 text-zinc-500" />
+                  </div>
                   <span className="text-xs text-zinc-500">
                     {new Date(item.startTime).toLocaleDateString(undefined, {
                       month: "short",
@@ -552,7 +583,37 @@ export default function WorkoutsTab() {
         </div>
       )}
 
-      {/* Routine Planner / Editor Modal */}
+      {/* Safe Routine Delete Confirmation Modal */}
+      {routineToDelete && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 max-w-sm w-full space-y-3">
+            <h3 className="font-bold text-white text-sm">Delete Routine?</h3>
+            <p className="text-xs text-zinc-400">
+              Are you sure you want to delete <span className="text-white font-semibold">"{routineToDelete.title}"</span>? Past workouts completed with this routine will remain intact.
+            </p>
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => setRoutineToDelete(null)}
+                className="flex-1 py-2 bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold text-zinc-300 rounded-xl"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  await db.routines.delete(routineToDelete.id);
+                  await db.routineItems.where("routineId").equals(routineToDelete.id).delete();
+                  setRoutineToDelete(null);
+                }}
+                className="flex-1 py-2 bg-rose-600 hover:bg-rose-500 text-xs font-bold text-white rounded-xl"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Routine Planner Modal */}
       {isRoutineModalOpen && (
         <div className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 pb-20 select-none">
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 w-full max-w-md h-[82vh] max-h-[640px] flex flex-col shadow-2xl">
@@ -682,19 +743,32 @@ export default function WorkoutsTab() {
               </div>
             </div>
 
-            <div className="pt-3 border-t border-zinc-800 shrink-0">
+            <div className="pt-3 border-t border-zinc-800 shrink-0 space-y-2">
               <button
                 onClick={handleSaveRoutine}
                 className="w-full py-3 bg-white text-black hover:bg-zinc-200 font-bold rounded-xl text-sm transition-all shadow-md active:scale-95"
               >
                 {editingRoutineId ? "Update Routine" : "Save Routine"}
               </button>
+              {editingRoutineId && (
+                <button
+                  onClick={() => {
+                    const routine = routines.find((item) => item.id === editingRoutineId);
+                    if (routine) {
+                      setRoutineToDelete(routine);
+                    }
+                  }}
+                  className="w-full py-2.5 bg-zinc-900 border border-zinc-800 text-rose-400 hover:border-rose-700 hover:bg-zinc-800 font-semibold rounded-xl text-xs transition-colors"
+                >
+                  Delete Routine
+                </button>
+              )}
             </div>
           </div>
         </div>
       )}
 
-      {/* Shared Unified Exercise Selector Modal */}
+      {/* Unified Exercise Selector Modal */}
       <ExerciseSelectorModal
         isOpen={showExercisePicker}
         onClose={() => setShowExercisePicker(false)}
@@ -712,52 +786,42 @@ export default function WorkoutsTab() {
         }}
       />
 
-      {/* Active Workout Conflict Modal */}
-      {showActiveConflictModal && (
-        <div className="fixed inset-0 z-[70] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 max-w-sm w-full space-y-4 shadow-2xl">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400">
-                <AlertTriangle className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-white">Active Session In Progress</h3>
-                <p className="text-xs text-zinc-400">You already have an unfinished workout.</p>
-              </div>
-            </div>
+      <CreateExerciseModal
+        isOpen={showCreateExerciseModal}
+        onClose={() => setShowCreateExerciseModal(false)}
+      />
 
-            <p className="text-xs text-zinc-300">
-              Starting a new routine will discard your current active workout session. Would you like to resume it instead?
+      <ImportAIRoutineModal
+        isOpen={showAIModal}
+        onClose={() => setShowAIModal(false)}
+        onImportComplete={() => {}}
+        existingExercises={exercises}
+      />
+
+      {pendingRoutineStart && (
+        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/60 backdrop-blur-[2px] p-4">
+          <div className="w-full max-w-sm rounded-2xl border border-zinc-700 bg-zinc-950 p-5 shadow-2xl">
+            <h3 className="text-base font-bold text-white">Active workout in progress</h3>
+            <p className="mt-2 text-xs text-zinc-400">
+              You already have an unfinished workout session. Choose what to do next.
             </p>
 
-            <div className="space-y-2 pt-1">
+            <div className="mt-4 space-y-2">
               <button
-                onClick={() => {
-                  setShowActiveConflictModal(false);
-                  router.push("/workouts/active");
-                }}
-                className="w-full py-2.5 bg-white text-black hover:bg-zinc-200 font-bold rounded-xl text-xs transition-all shadow-sm"
+                onClick={handleResumeActiveWorkout}
+                className="w-full rounded-xl bg-white text-black px-3 py-2.5 text-xs font-bold"
               >
-                Resume Current Workout
+                Resume Active Workout
               </button>
               <button
-                onClick={async () => {
-                  setShowActiveConflictModal(false);
-                  if (pendingRoutineToStart) {
-                    await executeStartRoutine(pendingRoutineToStart);
-                    setPendingRoutineToStart(null);
-                  }
-                }}
-                className="w-full py-2.5 bg-rose-500/10 border border-rose-500/20 hover:bg-rose-500/20 text-rose-400 font-bold rounded-xl text-xs transition-all"
+                onClick={confirmPendingRoutineStart}
+                className="w-full rounded-xl bg-rose-600 text-white px-3 py-2.5 text-xs font-bold"
               >
-                Discard & Start New Routine
+                Discard Current & Start Routine
               </button>
               <button
-                onClick={() => {
-                  setShowActiveConflictModal(false);
-                  setPendingRoutineToStart(null);
-                }}
-                className="w-full py-2 bg-transparent text-zinc-400 hover:text-white text-xs font-semibold"
+                onClick={() => setPendingRoutineStart(null)}
+                className="w-full rounded-xl bg-zinc-800 border border-zinc-700 px-3 py-2.5 text-xs font-semibold text-zinc-200"
               >
                 Cancel
               </button>
@@ -765,20 +829,6 @@ export default function WorkoutsTab() {
           </div>
         </div>
       )}
-
-      {/* Modal for Creating Custom Exercise */}
-      <CreateExerciseModal
-        isOpen={showCreateExerciseModal}
-        onClose={() => setShowCreateExerciseModal(false)}
-      />
-
-      {/* Modal for Guided AI Routine Import */}
-      <ImportAIRoutineModal
-        isOpen={showAIModal}
-        onClose={() => setShowAIModal(false)}
-        onImportComplete={() => {}}
-        existingExercises={exercises}
-      />
     </div>
   );
 }

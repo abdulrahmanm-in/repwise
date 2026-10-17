@@ -1,6 +1,3 @@
-// src/lib/driveBackup.ts
-import { exportDatabaseToJSON, importDatabaseFromJSON } from "./jsonBackup";
-
 declare global {
   interface Window {
     google?: any;
@@ -31,28 +28,77 @@ export function initGoogleAuth(onSuccess: (token: string) => void) {
   if (typeof window === "undefined") return;
   activeSuccessCallback = onSuccess;
 
-  const googleObj = window.google;
-  if (!googleObj || !CLIENT_ID) return;
+  const loadGoogleClient = () => {
+    if (window.google && window.google.accounts?.oauth2) {
+      const googleObj = window.google;
+      if (!googleObj || !CLIENT_ID) return;
 
-  try {
-    tokenClient = googleObj.accounts.oauth2.initTokenClient({
-      client_id: CLIENT_ID,
-      scope: SCOPES,
-      callback: (tokenResponse: any) => {
-        if (tokenResponse && tokenResponse.access_token) {
-          setStoredAccessToken(tokenResponse.access_token);
-          if (activeSuccessCallback) {
-            activeSuccessCallback(tokenResponse.access_token);
-          }
+      try {
+        tokenClient = googleObj.accounts.oauth2.initTokenClient({
+          client_id: CLIENT_ID,
+          scope: SCOPES,
+          callback: (tokenResponse: any) => {
+            if (tokenResponse && tokenResponse.access_token) {
+              setStoredAccessToken(tokenResponse.access_token);
+              if (activeSuccessCallback) {
+                activeSuccessCallback(tokenResponse.access_token);
+              }
+            }
+          },
+          error_callback: (error: any) => {
+            console.warn("Google OAuth popup closed or error:", error);
+          },
+        });
+      } catch (err) {
+        console.warn("Failed to initialize Google token client:", err);
+      }
+      return;
+    }
+
+    const script = document.querySelector<HTMLScriptElement>('script[src="https://accounts.google.com/gsi/client"]');
+    if (!script) {
+      const googleScript = document.createElement("script");
+      googleScript.src = "https://accounts.google.com/gsi/client";
+      googleScript.async = true;
+      googleScript.defer = true;
+      googleScript.onload = () => {
+        if (window.google && window.google.accounts?.oauth2) {
+          loadGoogleClient();
         }
-      },
-      error_callback: (error: any) => {
-        console.warn("Google OAuth popup closed or error:", error);
-      },
-    });
-  } catch (err) {
-    console.warn("Failed to initialize Google token client:", err);
-  }
+      };
+      document.head.appendChild(googleScript);
+    }
+  };
+
+  loadGoogleClient();
+}
+
+export async function requestSilentTokenRefresh(): Promise<string | null> {
+  return new Promise((resolve) => {
+    if (!tokenClient && typeof window !== "undefined" && window.google) {
+      initGoogleAuth(activeSuccessCallback || (() => {}));
+    }
+
+    if (!tokenClient) {
+      resolve(null);
+      return;
+    }
+
+    tokenClient.callback = (tokenResponse: any) => {
+      if (tokenResponse?.access_token) {
+        setStoredAccessToken(tokenResponse.access_token);
+        resolve(tokenResponse.access_token);
+      } else {
+        resolve(null);
+      }
+    };
+
+    try {
+      tokenClient.requestAccessToken({ prompt: "none" });
+    } catch {
+      resolve(null);
+    }
+  });
 }
 
 export function requestDriveAuth() {
@@ -69,41 +115,6 @@ export function requestDriveAuth() {
     tokenClient.requestAccessToken({ prompt: "" });
   } else {
     alert("Google Identity service is still loading. Please tap again in a moment.");
-  }
-}
-
-/**
- * Permanently removes all backup files from the user's hidden Google Drive appDataFolder
- */
-export async function deleteDriveAppDataBackup(): Promise<boolean> {
-  const token = getStoredAccessToken();
-  if (!token) return true;
-
-  try {
-    const searchRes = await fetch(
-      "https://www.googleapis.com/drive/v3/files?spaces=appDataFolder",
-      {
-        headers: { Authorization: `Bearer ${token}` },
-      }
-    );
-
-    if (!searchRes.ok) return false;
-
-    const data = await searchRes.json();
-    if (data.files && data.files.length > 0) {
-      await Promise.all(
-        data.files.map((file: { id: string }) =>
-          fetch(`https://www.googleapis.com/drive/v3/files/${file.id}`, {
-            method: "DELETE",
-            headers: { Authorization: `Bearer ${token}` },
-          })
-        )
-      );
-    }
-    return true;
-  } catch (e) {
-    console.error("Failed to delete drive appdata files:", e);
-    return false;
   }
 }
 

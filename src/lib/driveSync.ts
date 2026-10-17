@@ -1,10 +1,10 @@
-// src/lib/driveSync.ts
 import { db } from "@/db/database";
 import { exportDatabaseToJSON, importDatabaseFromJSON } from "./jsonBackup";
-import { getStoredAccessToken, disconnectGoogleDrive } from "./driveBackup";
+import { getStoredAccessToken, disconnectGoogleDrive, requestSilentTokenRefresh } from "./driveBackup";
 
 const BACKUP_FILENAME = "repwise_db.json";
 const PROFILE_STORAGE_KEY = "repwise_user_profile";
+const ACTIVE_USER_ID_KEY = "repwise_active_user_id";
 
 let syncTimeout: NodeJS.Timeout | null = null;
 
@@ -18,9 +18,6 @@ export interface GoogleUserProfile {
   email_verified: boolean;
 }
 
-/**
- * Reads locally cached user profile
- */
 export function getStoredUserProfile(): GoogleUserProfile | null {
   if (typeof window === "undefined") return null;
   const raw = localStorage.getItem(PROFILE_STORAGE_KEY);
@@ -32,9 +29,20 @@ export function getStoredUserProfile(): GoogleUserProfile | null {
   }
 }
 
-/**
- * Fetches identity from Google and saves to localStorage
- */
+export function getStoredUserId(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(ACTIVE_USER_ID_KEY);
+}
+
+export function setStoredUserId(userId: string | null) {
+  if (typeof window === "undefined") return;
+  if (userId) {
+    localStorage.setItem(ACTIVE_USER_ID_KEY, userId);
+  } else {
+    localStorage.removeItem(ACTIVE_USER_ID_KEY);
+  }
+}
+
 export async function fetchAndStoreGoogleProfile(
   token: string
 ): Promise<GoogleUserProfile | null> {
@@ -43,30 +51,27 @@ export async function fetchAndStoreGoogleProfile(
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) {
-      if (res.status === 401) disconnectGoogleDrive();
-      return null;
+      // Do not clear profile on temporary token expiration; try refreshing silently
+      return getStoredUserProfile();
     }
     const profile: GoogleUserProfile = await res.json();
     localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profile));
+    if (profile?.sub) {
+      setStoredUserId(profile.sub);
+    }
     return profile;
   } catch (err) {
     console.error("Error fetching Google profile:", err);
-    return null;
+    return getStoredUserProfile();
   }
 }
 
-/**
- * Removes cached user profile
- */
 export function clearStoredUserProfile() {
   if (typeof window !== "undefined") {
     localStorage.removeItem(PROFILE_STORAGE_KEY);
   }
 }
 
-/**
- * Helper to wipe all local database records
- */
 export async function wipeAllLocalData() {
   await Promise.all([
     db.workouts.clear(),
@@ -79,13 +84,10 @@ export async function wipeAllLocalData() {
   ]);
 }
 
-/**
- * Completely logs out user: wipes OAuth tokens, clears local profile,
- * wipes database tables (ensuring zero data leakage across accounts), and reloads.
- */
 export async function performFullLogout(clearLocalDatabase: boolean = true) {
   disconnectGoogleDrive();
   clearStoredUserProfile();
+  setStoredUserId(null);
   if (typeof window !== "undefined") {
     localStorage.removeItem("repwise_guest_mode");
   }
@@ -99,12 +101,12 @@ export async function performFullLogout(clearLocalDatabase: boolean = true) {
   }
 }
 
-/**
- * Searches and downloads the latest snapshot from the user's hidden Google Drive appDataFolder
- */
 export async function pullLatestFromDrive(): Promise<boolean> {
-  const token = getStoredAccessToken();
-  if (!token) return false;
+  let token = getStoredAccessToken();
+  if (!token) {
+    token = await requestSilentTokenRefresh();
+    if (!token) return false;
+  }
 
   try {
     const searchRes = await fetch(
@@ -115,9 +117,10 @@ export async function pullLatestFromDrive(): Promise<boolean> {
     );
 
     if (searchRes.status === 401) {
-      disconnectGoogleDrive();
-      clearStoredUserProfile();
-      return false;
+      // Try one silent refresh before giving up
+      const refreshedToken = await requestSilentTokenRefresh();
+      if (!refreshedToken) return false;
+      return pullLatestFromDrive();
     }
 
     const searchData = await searchRes.json();
@@ -136,19 +139,26 @@ export async function pullLatestFromDrive(): Promise<boolean> {
 
     if (!fileRes.ok) return false;
     const rawJson = await fileRes.text();
-    return await importDatabaseFromJSON(rawJson);
+    const result = await importDatabaseFromJSON(rawJson);
+    if (result && typeof window !== "undefined") {
+      const currentUser = getStoredUserProfile();
+      if (currentUser?.sub) {
+        setStoredUserId(currentUser.sub);
+      }
+    }
+    return result;
   } catch (error) {
     console.error("Pull from Drive failed:", error);
     return false;
   }
 }
 
-/**
- * Overwrites or creates the latest database snapshot in Drive
- */
 export async function pushLatestToDrive(): Promise<boolean> {
-  const token = getStoredAccessToken();
-  if (!token) return false;
+  let token = getStoredAccessToken();
+  if (!token) {
+    token = await requestSilentTokenRefresh();
+    if (!token) return false;
+  }
 
   try {
     const backupData = await exportDatabaseToJSON();
@@ -162,9 +172,9 @@ export async function pushLatestToDrive(): Promise<boolean> {
     );
 
     if (searchRes.status === 401) {
-      disconnectGoogleDrive();
-      clearStoredUserProfile();
-      return false;
+      const refreshedToken = await requestSilentTokenRefresh();
+      if (!refreshedToken) return false;
+      return pushLatestToDrive();
     }
 
     const searchData = await searchRes.json();
@@ -212,9 +222,6 @@ export async function pushLatestToDrive(): Promise<boolean> {
 }
 
 export function triggerAutoSync(delayMs: number = 1500) {
-  const token = getStoredAccessToken();
-  if (!token) return;
-
   if (syncTimeout) {
     clearTimeout(syncTimeout);
   }

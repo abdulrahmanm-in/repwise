@@ -1,9 +1,9 @@
-// src/app/settings/page.tsx
 "use client";
 
 import { useState, useEffect } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   Download,
   Upload,
@@ -19,7 +19,7 @@ import {
   FileText,
   Timer,
   AlertTriangle,
-  Trash2,
+  ChevronRight,
 } from "lucide-react";
 import { exportDatabaseToJSON, importDatabaseFromJSON } from "@/lib/jsonBackup";
 import {
@@ -27,7 +27,6 @@ import {
   requestDriveAuth,
   getStoredAccessToken,
   disconnectGoogleDrive,
-  deleteDriveAppDataBackup,
 } from "@/lib/driveBackup";
 import {
   fetchAndStoreGoogleProfile,
@@ -36,13 +35,13 @@ import {
   pullLatestFromDrive,
   pushLatestToDrive,
   performFullLogout,
-  wipeAllLocalData,
   GoogleUserProfile,
 } from "@/lib/driveSync";
 import { usePWAInstall } from "@/hooks/usePWAInstall";
 import LoadingOverlay from "@/components/LoadingOverlay";
 
 export default function SettingsView() {
+  const router = useRouter();
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [driveConnected, setDriveConnected] = useState(false);
   const [userProfile, setUserProfile] = useState<GoogleUserProfile | null>(null);
@@ -57,14 +56,9 @@ export default function SettingsView() {
     subMessage: "",
   });
 
-  // Modal State for Danger Zone Deletion
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [deleteInputText, setDeleteInputText] = useState("");
-
   const { isInstalled, isIOS, canInstall, triggerInstall } = usePWAInstall();
 
   useEffect(() => {
-    // Rest timer preference
     const savedTimerPref = localStorage.getItem("repwise_rest_timer_enabled");
     if (savedTimerPref !== null) {
       setTimerEnabled(savedTimerPref === "true");
@@ -73,15 +67,15 @@ export default function SettingsView() {
     const token = getStoredAccessToken();
     const cachedProfile = getStoredUserProfile();
 
-    if (token) {
+    // If profile exists locally, show connected even if token is awaiting silent refresh
+    if (cachedProfile) {
       setDriveConnected(true);
-      if (cachedProfile) {
-        setUserProfile(cachedProfile);
-      } else {
-        fetchAndStoreGoogleProfile(token).then((profile) => {
-          if (profile) setUserProfile(profile);
-        });
-      }
+      setUserProfile(cachedProfile);
+    } else if (token) {
+      setDriveConnected(true);
+      fetchAndStoreGoogleProfile(token).then((profile) => {
+        if (profile) setUserProfile(profile);
+      });
     }
 
     initGoogleAuth(async (newToken: string) => {
@@ -172,33 +166,6 @@ export default function SettingsView() {
     }
   };
 
-  const handleConfirmDeleteAll = async () => {
-    if (deleteInputText.trim().toUpperCase() !== "DELETE") return;
-
-    setShowDeleteModal(false);
-    setSyncState({
-      loading: true,
-      message: "Purging Data",
-      subMessage: driveConnected
-        ? "Clearing local storage & Google Drive..."
-        : "Clearing local storage...",
-    });
-
-    try {
-      if (driveConnected) {
-        await deleteDriveAppDataBackup();
-      }
-      await wipeAllLocalData();
-      alert("All data has been permanently cleared.");
-      window.location.reload();
-    } catch (e: any) {
-      alert(`Failed to delete data: ${e.message || e}`);
-    } finally {
-      setSyncState({ loading: false, message: "", subMessage: "" });
-      setDeleteInputText("");
-    }
-  };
-
   const handleExportJSON = async () => {
     const json = await exportDatabaseToJSON();
     const blob = new Blob([json], { type: "application/json" });
@@ -249,7 +216,7 @@ export default function SettingsView() {
         </div>
       )}
 
-      {/* WORKOUT PREFERENCES (Rest Timer Toggle) */}
+      {/* REST TIMER PREFERENCE */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
@@ -345,7 +312,7 @@ export default function SettingsView() {
         {!driveConnected ? (
           <div className="space-y-3">
             <p className="text-xs text-zinc-400 leading-relaxed">
-              Connect Google Drive to preserve routines and logs in your private Drive AppData folder[cite: 1, 2].
+              Connect Google Drive to preserve routines and logs in your private Drive AppData folder.
             </p>
             <button
               onClick={requestDriveAuth}
@@ -426,28 +393,25 @@ export default function SettingsView() {
         </div>
       </div>
 
-      {/* DANGER ZONE */}
-      <div className="bg-rose-950/20 border border-rose-900/40 rounded-2xl p-4 space-y-3">
-        <div className="flex items-center gap-2 pb-1 text-rose-400">
-          <AlertTriangle className="w-4 h-4" />
-          <h2 className="text-xs uppercase font-bold tracking-wider">Danger Zone</h2>
+      {/* GRANULAR DATA MANAGEMENT (Replaces Danger Zone Delete All) */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-3">
+        <div className="flex items-center gap-2 pb-1 text-zinc-300">
+          <AlertTriangle className="w-4 h-4 text-amber-400" />
+          <h2 className="text-xs uppercase font-bold tracking-wider">Data Management</h2>
         </div>
         <p className="text-xs text-zinc-400">
-          Permanently erase all your workout history, routines, and custom exercises.
+          Selectively clear workout logs, routines, or custom exercises.
         </p>
         <button
-          onClick={() => {
-            setDeleteInputText("");
-            setShowDeleteModal(true);
-          }}
-          className="w-full py-2.5 bg-rose-500/10 border border-rose-500/30 hover:bg-rose-500/20 text-rose-400 font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-colors active:scale-[0.99]"
+          onClick={() => router.push("/settings/data")}
+          className="w-full py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-white font-semibold text-xs rounded-xl flex items-center justify-between px-4 transition-colors"
         >
-          <Trash2 className="w-4 h-4" />
-          <span>Delete All Data</span>
+          <span>Manage / Clear Stored Data</span>
+          <ChevronRight className="w-4 h-4 text-zinc-400" />
         </button>
       </div>
 
-      {/* LOGOUT BUTTON (Spaced away from danger zone) */}
+      {/* LOGOUT BUTTON */}
       <div className="pt-2">
         <button
           onClick={() => {
@@ -482,63 +446,9 @@ export default function SettingsView() {
           </Link>
         </div>
         <p className="text-center text-[10px] text-zinc-600 font-mono mt-2">
-          Repwise • Local-First • Version 1.1.0
+          Repwise • Local-First • Version 1.2.0
         </p>
       </div>
-
-      {/* Permanent Deletion Confirmation Modal */}
-      {showDeleteModal && (
-        <div className="fixed inset-0 z-[70] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 max-w-sm w-full space-y-4 shadow-2xl">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400">
-                <AlertTriangle className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-white">Delete All Data?</h3>
-                <p className="text-xs text-zinc-400">This action cannot be undone.</p>
-              </div>
-            </div>
-
-            <p className="text-xs text-zinc-300 leading-relaxed">
-              This will permanently delete all workouts, custom exercises, routines, and backups
-              {driveConnected ? " from this device and Google Drive" : ""}.
-            </p>
-
-            <div className="space-y-1.5 pt-1">
-              <label className="text-[11px] font-semibold text-zinc-400 block">
-                Type <span className="font-mono text-white font-bold">DELETE</span> to confirm:
-              </label>
-              <input
-                type="text"
-                autoFocus
-                placeholder="DELETE"
-                value={deleteInputText}
-                onChange={(e) => setDeleteInputText(e.target.value)}
-                className="w-full bg-zinc-950 border border-zinc-700 focus:border-rose-500 rounded-xl px-3 py-2 text-xs text-white outline-none font-mono tracking-widest uppercase"
-              />
-            </div>
-
-            <div className="flex gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setShowDeleteModal(false)}
-                className="flex-1 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white rounded-xl text-xs font-semibold transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={deleteInputText.trim().toUpperCase() !== "DELETE"}
-                onClick={handleConfirmDeleteAll}
-                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-30 disabled:hover:bg-rose-600 text-white rounded-xl text-xs font-bold transition-all shadow-md active:scale-95"
-              >
-                Permanently Delete
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
