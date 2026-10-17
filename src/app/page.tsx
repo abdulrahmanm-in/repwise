@@ -95,22 +95,6 @@ export default function Home() {
       window.dispatchEvent(new Event("repwise_auth_changed"));
     }
 
-    initGoogleAuth(async (newToken: string) => {
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-
-      setIsAuthenticated(true);
-      setIsSigningIn(false);
-      window.dispatchEvent(new Event("repwise_auth_changed"));
-
-      try {
-        const profile = await fetchAndStoreGoogleProfile(newToken);
-        if (profile) setUserProfile(profile);
-        pullLatestFromDrive().catch((e) => console.log("Silent drive pull:", e));
-      } catch (err) {
-        console.warn("Background sync warning:", err);
-      }
-    });
-
     return () => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
     };

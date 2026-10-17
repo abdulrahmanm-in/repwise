@@ -77,34 +77,6 @@ export default function SettingsView() {
         if (profile) setUserProfile(profile);
       });
     }
-
-    initGoogleAuth(async (newToken: string) => {
-      setDriveConnected(true);
-      setSyncState({
-        loading: true,
-        message: "Authenticating with Google",
-        subMessage: "Connecting to Google Drive AppData...",
-      });
-
-      const profile = await fetchAndStoreGoogleProfile(newToken);
-      if (profile) setUserProfile(profile);
-
-      setSyncState({
-        loading: true,
-        message: "Restoring Workout Data",
-        subMessage: "Fetching latest workout history...",
-      });
-
-      const synced = await pullLatestFromDrive();
-      setSyncState({ loading: false, message: "", subMessage: "" });
-
-      if (synced) {
-        setStatusMessage("Cloud sync complete! Refreshing interface...");
-        setTimeout(() => window.location.reload(), 1000);
-      } else {
-        setStatusMessage("Signed in! Repwise is synced with your Google Drive.");
-      }
-    });
   }, []);
 
   const handleToggleTimer = () => {
@@ -446,7 +418,7 @@ export default function SettingsView() {
           </Link>
         </div>
         <p className="text-center text-[10px] text-zinc-600 font-mono mt-2">
-          Repwise • Local-First • Version 1.2.0
+          Repwise • Local-First • Version 1.2.1
         </p>
       </div>
     </div>
